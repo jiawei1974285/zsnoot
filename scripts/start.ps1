@@ -12,6 +12,18 @@ $ErrorActionPreference = "Stop"
 $RootDir = Split-Path -Parent $PSScriptRoot
 $FrontendDir = Join-Path $RootDir "frontend"
 
+function Resolve-Python {
+  $cmd = Get-Command python -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+
+  $bundled = Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
+  if (Test-Path $bundled) { return $bundled }
+
+  throw "Python was not found. Install Python or add it to PATH."
+}
+
+$PythonExe = Resolve-Python
+
 Write-Host "=== mjq-handynotes one-click start ===" -ForegroundColor Cyan
 Write-Host "Project root: $RootDir"
 Write-Host ""
@@ -57,13 +69,13 @@ if (-not (Test-Path $NodeModules)) {
 # Python deps: only check importability (avoid pip-installing every run).
 $pythonOk = $false
 try {
-  python -c "import flask, yaml, requests" 2>$null
+  & $PythonExe -c "import flask, yaml, requests" 2>$null
   if ($LASTEXITCODE -eq 0) { $pythonOk = $true }
 } catch { }
 if (-not $pythonOk) {
   Write-Host "[!] Python deps incomplete, running pip install -r requirements.txt..." -ForegroundColor Yellow
   Push-Location $RootDir
-  python -m pip install -r requirements.txt
+  & $PythonExe -m pip install -r requirements.txt
   if ($LASTEXITCODE -ne 0) {
     Pop-Location
     Write-Host "    pip install failed, abort." -ForegroundColor Red
@@ -76,13 +88,13 @@ if (-not $pythonOk) {
 # ---- 3. Launch backend (new window) -----------------------------------
 Write-Host ""
 Write-Host "[*] Starting backend Flask (port 5004)..." -ForegroundColor Cyan
-$backendCmd = "Set-Location '$RootDir'; `$Host.UI.RawUI.WindowTitle='mjq-backend (5004)'; python app.py"
-Start-Process powershell -ArgumentList "-NoExit", "-Command", $backendCmd | Out-Null
+$backendCmd = "& { Set-Location '$RootDir'; `$Host.UI.RawUI.WindowTitle='mjq-backend (5004)'; & '$PythonExe' app.py }"
+Start-Process powershell -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-Command", $backendCmd | Out-Null
 
 # ---- 4. Launch frontend dev (new window) ------------------------------
 Write-Host "[*] Starting frontend Vite (port 5174)..." -ForegroundColor Cyan
-$frontendCmd = "Set-Location '$FrontendDir'; `$Host.UI.RawUI.WindowTitle='mjq-frontend (5174)'; npm run dev"
-Start-Process powershell -ArgumentList "-NoExit", "-Command", $frontendCmd | Out-Null
+$frontendCmd = "& { Set-Location '$FrontendDir'; `$Host.UI.RawUI.WindowTitle='mjq-frontend (5174)'; npm.cmd run dev }"
+Start-Process powershell -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-Command", $frontendCmd | Out-Null
 
 # ---- 5. Wait for backend ----------------------------------------------
 Write-Host ""

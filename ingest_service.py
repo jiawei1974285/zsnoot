@@ -208,11 +208,17 @@ def _ingest_runtime_config(project_dir: str) -> Dict:
     except Exception:
         section = {}
     return {
-        "max_workers": max(1, int(section.get("max_workers", 3))),
+        "max_workers": max(1, int(section.get("max_workers", 5))),
     }
 
 
-def _process_one_file(project_dir: str, original: Dict) -> Dict:
+def _process_one_file(
+    project_dir: str,
+    original: Dict,
+    *,
+    mode: str = "batch",
+    reparse_context: str = "",
+) -> Dict:
     """处理单个归档文件 → wiki 页面。返回标准化的结果字典。
 
     所有异常都在这里捕获并降级成 fallback 页面（保持原则 14 容错路径完整）。
@@ -227,7 +233,13 @@ def _process_one_file(project_dir: str, original: Dict) -> Dict:
     try:
         file_content = parse_file(str(abs_path))
         file_info = get_file_info(str(abs_path))
-        result = auto_ingest(str(abs_path), file_content, file_info["ext"])
+        result = auto_ingest(
+            str(abs_path),
+            file_content,
+            file_info["ext"],
+            mode=mode,
+            reparse_context=reparse_context,
+        )
 
         if result.get("status") == "success" and result.get("generated_files"):
             elapsed_ms = int((time.time() - t0) * 1000)
@@ -290,6 +302,7 @@ def _run_pipeline_on_archived(
     *,
     on_each_done: Optional[callable] = None,
     label: str = "batch",
+    merge_existing: bool = False,
 ) -> Dict:
     """对已经在磁盘上的归档文件列表运行 ingest pipeline 核心。
 
@@ -314,8 +327,9 @@ def _run_pipeline_on_archived(
     total = len(archived)
     t_batch = time.time()
 
-    generated_files: List[str] = []
-    entities: List[Dict] = []
+    existing_batch = store.get_batch(batch_id) if merge_existing else None
+    generated_files: List[str] = list(existing_batch.get("generated_files") or []) if existing_batch else []
+    entities: List[Dict] = list(existing_batch.get("entities") or []) if existing_batch else []
     errors: List[Dict] = []
     agg_lock = threading.Lock()
     done_counter = {"n": 0}
@@ -324,8 +338,8 @@ def _run_pipeline_on_archived(
         with agg_lock:
             done_counter["n"] += 1
             done = done_counter["n"]
-            generated_files.extend(fr["generated_files"])
-            entities.extend(fr["entities"])
+            generated_files[:] = _dedupe_items(generated_files + fr["generated_files"])
+            entities[:] = _dedupe_items(entities + fr["entities"])
             if fr["error"]:
                 errors.append({"file": fr["file_name"], "error": fr["error"]})
             store.append_log(batch_id, fr["log_message"])
@@ -352,7 +366,7 @@ def _run_pipeline_on_archived(
     if total == 1:
         set_status(project_dir, "processing", f"正在处理 {archived[0]['name']}",
                    {"batch_id": batch_id, "done": 0, "total": 1})
-        _on_done(_process_one_file(project_dir, archived[0]))
+        _on_done(_process_one_file(project_dir, archived[0], mode=label, reparse_context=_reparse_context(existing_batch)))
     else:
         set_status(project_dir, "processing",
                    f"并发处理中 (0/{total}, 并发数 {max_workers})",
@@ -360,7 +374,8 @@ def _run_pipeline_on_archived(
                     "max_workers": max_workers})
         with ThreadPoolExecutor(max_workers=max_workers,
                                 thread_name_prefix=label) as pool:
-            futures = [pool.submit(_process_one_file, project_dir, original)
+            context = _reparse_context(existing_batch)
+            futures = [pool.submit(_process_one_file, project_dir, original, mode=label, reparse_context=context)
                        for original in archived]
             for fut in as_completed(futures):
                 try:
@@ -402,6 +417,34 @@ def _run_pipeline_on_archived(
     return detail
 
 
+def _dedupe_items(items: List) -> List:
+    seen = set()
+    result = []
+    for item in items:
+        key = repr(sorted(item.items())) if isinstance(item, dict) else str(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
+
+
+def _reparse_context(batch: Optional[Dict]) -> str:
+    if not batch:
+        return ""
+    context = {
+        "existing_generated_files": list(batch.get("generated_files") or [])[:80],
+        "existing_entities": list(batch.get("entities") or [])[:120],
+        "existing_links": list(batch.get("links") or [])[:120],
+    }
+    try:
+        import json
+
+        return json.dumps(context, ensure_ascii=False, indent=2)
+    except Exception:
+        return str(context)
+
+
 def ingest_uploaded_files(
     files: Iterable,
     project_dir: str,
@@ -427,6 +470,27 @@ def ingest_uploaded_files(
         set_status(project_dir, "error", f"入库失败: {exc}", {"batch_id": batch_id})
         logger.exception("batch failed id=%s", batch_id)
         raise
+
+
+def reparse_batch(batch_id: str, project_dir: str, store: Optional[IngestBatchStore] = None) -> Dict:
+    """Re-run ingest on a batch's archived raw files and merge with existing results."""
+    store = store or default_store(project_dir)
+    batch = store.get_batch(batch_id)
+    if not batch:
+        raise KeyError(f"Batch not found: {batch_id}")
+    archived = batch.get("original_files") or []
+    if not archived:
+        raise ValueError("Batch has no archived raw files")
+    store.update_batch(batch_id, status="running")
+    store.append_log(batch_id, "开始再次解析原始材料")
+    return _run_pipeline_on_archived(
+        archived,
+        batch_id,
+        project_dir,
+        store,
+        label="reparse",
+        merge_existing=True,
+    )
 
 
 # ════════════════════════════════════════════════════════════════

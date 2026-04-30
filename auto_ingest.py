@@ -108,6 +108,28 @@ When there is disagreement, include `conflicts: [...]` in frontmatter and a `## 
 """
 
 
+REPARSE_DEEPENING_POLICY = """
+## 再次解析补充模式
+
+这是对同一份材料的再次解析，不要只复刻上一次的概要。
+请把下面的历史结果当作已知上下文，重点补充遗漏信息：
+- 逐页细读原文，尽量抽取此前遗漏的人物、地点、组织、事件、证据、结论、案件摘要和关系。
+- 对同名实体输出同一路径页面，补充新的 tags、related、relations 和正文事实；系统会与历史页面合并。
+- 如果历史结果里已经有某个实体，请优先寻找它的新关系、时间、地点、角色、证据来源和冲突信息。
+- 如果原文支持新的实体或关系，请创建新的 wiki 页面；没有新增事实时，也要在已有页面中补充更细的证据描述。
+
+## 历史已生成结果
+{reparse_context}
+"""
+
+
+def reparse_policy_text(reparse_context: str = "") -> str:
+    context = (reparse_context or "").strip()
+    if not context:
+        return ""
+    return REPARSE_DEEPENING_POLICY.format(reparse_context=context)
+
+
 def normalize_generated_file_path(block: Dict) -> str:
     """Route generated pages by frontmatter type into stable wiki directories."""
     rel_path = (block.get('path') or '').strip().replace('\\', '/')
@@ -160,7 +182,7 @@ def apply_intelligence_template(block: Dict) -> str:
     return content.rstrip() + "\n\n" + "\n".join(additions)
 
 
-def build_analysis_prompt(schema_content: str, purpose_content: str, file_content: str, file_type: str = '') -> str:
+def build_analysis_prompt(schema_content: str, purpose_content: str, file_content: str, file_type: str = '', reparse_context: str = '') -> str:
     """构建分析 Prompt"""
     type_hint = f"（文件类型：{file_type}）" if file_type else ""
     custom_types = custom_category_map()
@@ -187,6 +209,8 @@ def build_analysis_prompt(schema_content: str, purpose_content: str, file_conten
 {role_hint}
 
 {CONFLICT_POLICY}
+
+{reparse_policy_text(reparse_context)}
 
 ## 自定义页面类型
 
@@ -235,7 +259,7 @@ def build_analysis_prompt(schema_content: str, purpose_content: str, file_conten
 """
 
 
-def build_generation_prompt(schema_content: str, analysis: Dict, file_content: str) -> str:
+def build_generation_prompt(schema_content: str, analysis: Dict, file_content: str, reparse_context: str = '') -> str:
     """构建生成 Prompt"""
     custom_types = custom_category_map()
     custom_type_text = "、".join(custom_types.keys()) if custom_types else "无"
@@ -272,6 +296,8 @@ def build_generation_prompt(schema_content: str, analysis: Dict, file_content: s
 {custom_dir_text}
 
 {CONFLICT_POLICY}
+
+{reparse_policy_text(reparse_context)}
 
 ## 输出格式
 
@@ -320,7 +346,7 @@ updated: 2024-03-15
 """
 
 
-def build_unified_prompt(schema_content: str, purpose_content: str, file_content: str, file_type: str = '') -> str:
+def build_unified_prompt(schema_content: str, purpose_content: str, file_content: str, file_type: str = '', reparse_context: str = '') -> str:
     """合并版 prompt：一次调用直接产出 FILE blocks，不再先 analyze 后 generate。
 
     设计：把原来 build_analysis_prompt + build_generation_prompt 的指令合二为一。
@@ -352,6 +378,8 @@ def build_unified_prompt(schema_content: str, purpose_content: str, file_content
 {role_hint}
 
 {CONFLICT_POLICY}
+
+{reparse_policy_text(reparse_context)}
 
 ## 自定义页面类型
 
@@ -491,6 +519,59 @@ def _read_text_file(path: str) -> str:
         return f.read()
 
 
+def parse_frontmatter(content: str) -> Tuple[Dict, str]:
+    match = re.match(r"^---\n(.*?)\n---\n(.*)$", content or "", re.DOTALL)
+    if not match:
+        return {}, content or ""
+    try:
+        return yaml.safe_load(match.group(1)) or {}, match.group(2)
+    except yaml.YAMLError:
+        return {}, content or ""
+
+
+def _dedupe_list(values: List) -> List:
+    seen = set()
+    result = []
+    for value in values:
+        key = json.dumps(value, ensure_ascii=False, sort_keys=True) if isinstance(value, (dict, list)) else str(value)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(value)
+    return result
+
+
+def _merge_page_content(existing: str, incoming: str) -> str:
+    old_meta, old_body = parse_frontmatter(existing)
+    new_meta, new_body = parse_frontmatter(incoming)
+    merged_meta = {**old_meta, **new_meta}
+    for key in ("tags", "related", "relations"):
+        merged_meta[key] = _dedupe_list(list(old_meta.get(key) or []) + list(new_meta.get(key) or []))
+
+    old_text = (old_body or "").strip()
+    new_text = (new_body or "").strip()
+    if not old_text:
+        merged_body = new_text
+    elif not new_text or new_text in old_text:
+        merged_body = old_text
+    else:
+        merged_body = f"{old_text}\n\n## 再次解析补充\n\n{new_text}"
+
+    yaml_str = yaml.dump(merged_meta, allow_unicode=True, default_flow_style=False)
+    return f"---\n{yaml_str}---\n{merged_body.rstrip()}\n"
+
+
+def _apply_block_meta(content: str, block_meta: Dict) -> str:
+    if not block_meta:
+        return content
+    meta, body = parse_frontmatter(content)
+    merged = {**meta, **block_meta}
+    for key in ("tags", "related", "relations"):
+        merged[key] = _dedupe_list(list(meta.get(key) or []) + list(block_meta.get(key) or []))
+    yaml_str = yaml.dump(merged, allow_unicode=True, default_flow_style=False)
+    return f"---\n{yaml_str}---\n{body.lstrip()}"
+
+
 def _write_blocks_to_disk(file_blocks: List[Dict]) -> List[str]:
     """落盘 FILE blocks 并返回相对路径列表。"""
     generated_files: List[str] = []
@@ -499,6 +580,10 @@ def _write_blocks_to_disk(file_blocks: List[Dict]) -> List[str]:
         full_path = os.path.join(PROJECT_DIR, rel_path)
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
         content = apply_intelligence_template(block)
+        content = _apply_block_meta(content, block.get('meta') or {})
+        if os.path.exists(full_path):
+            with open(full_path, 'r', encoding='utf-8') as f:
+                content = _merge_page_content(f.read(), content)
         with open(full_path, 'w', encoding='utf-8') as f:
             f.write(content)
         generated_files.append(rel_path)
@@ -526,14 +611,15 @@ def _append_wiki_log(file_path: str, count: int) -> None:
 
 def _auto_ingest_single_call(file_path: str, file_content: str, file_type: str,
                              schema_content: str, purpose_content: str,
-                             model_role: str, max_tokens: int) -> Dict:
+                             model_role: str, max_tokens: int,
+                             reparse_context: str = "") -> Dict:
     """合并 prompt：一次 LLM 调用直接产出 FILE blocks。"""
     from agent_status import set_status
 
     set_status(PROJECT_DIR, 'generating',
                f'正在生成知识页面 {os.path.basename(file_path)}',
                {'model_role': model_role, 'mode': 'single_call'})
-    prompt = build_unified_prompt(schema_content, purpose_content, file_content, file_type)
+    prompt = build_unified_prompt(schema_content, purpose_content, file_content, file_type, reparse_context)
     t0 = time.time()
     text = chat_completion(
         [
@@ -571,7 +657,8 @@ def _auto_ingest_single_call(file_path: str, file_content: str, file_type: str,
 
 def _auto_ingest_two_call(file_path: str, file_content: str, file_type: str,
                           schema_content: str, purpose_content: str,
-                          model_role: str, max_tokens: int) -> Dict:
+                          model_role: str, max_tokens: int,
+                          reparse_context: str = "") -> Dict:
     """旧的 2 次调用流程：先 analyze 再 generate。保留作为 fallback。"""
     from agent_status import set_status
 
@@ -579,7 +666,7 @@ def _auto_ingest_two_call(file_path: str, file_content: str, file_type: str,
     set_status(PROJECT_DIR, 'analyzing',
                f'正在分析 {os.path.basename(file_path)}',
                {'model_role': model_role, 'mode': 'two_call'})
-    analysis_prompt = build_analysis_prompt(schema_content, purpose_content, file_content, file_type)
+    analysis_prompt = build_analysis_prompt(schema_content, purpose_content, file_content, file_type, reparse_context)
     analysis_text = chat_completion(
         [
             {'role': 'system', 'content': '你是警务知识分析助手。'},
@@ -608,7 +695,7 @@ def _auto_ingest_two_call(file_path: str, file_content: str, file_type: str,
     set_status(PROJECT_DIR, 'generating',
                f'正在生成知识页面 {os.path.basename(file_path)}',
                {'model_role': 'llm', 'mode': 'two_call'})
-    generation_prompt = build_generation_prompt(schema_content, analysis, file_content)
+    generation_prompt = build_generation_prompt(schema_content, analysis, file_content, reparse_context)
     generation_text = chat_completion(
         [
             {'role': 'system', 'content': '你是警务知识库生成助手。'},
@@ -632,7 +719,7 @@ def _auto_ingest_two_call(file_path: str, file_content: str, file_type: str,
     }
 
 
-def auto_ingest(file_path: str, file_content: str, file_type: str = '') -> Dict:
+def auto_ingest(file_path: str, file_content: str, file_type: str = '', mode: str = "batch", reparse_context: str = '') -> Dict:
     """
     自动摄入：文件 → LLM → Wiki 页面
 
@@ -647,12 +734,14 @@ def auto_ingest(file_path: str, file_content: str, file_type: str = '') -> Dict:
     schema_content = _read_text_file(os.path.join(PROJECT_DIR, 'schema.md'))
     purpose_content = _read_text_file(os.path.join(PROJECT_DIR, 'purpose.md'))
     model_role = 'ocr_model' if file_type.lower() in {'.jpg', '.jpeg', '.png', '.bmp', '.gif'} else 'llm'
+    context = reparse_context if mode == "reparse" else ""
 
     if cfg['single_call']:
         result = _auto_ingest_single_call(
             file_path, file_content, file_type,
             schema_content, purpose_content,
             model_role, cfg['max_tokens'],
+            context,
         )
         # single_call 拿到 LLM 响应但未识别为 FILE blocks 时，提示词没被遵循；
         # 此时退到 two_call 重试一次（two_call 的 generate 阶段对格式要求更明确）。
@@ -664,12 +753,14 @@ def auto_ingest(file_path: str, file_content: str, file_type: str = '') -> Dict:
                 file_path, file_content, file_type,
                 schema_content, purpose_content,
                 model_role, cfg['max_tokens'],
+                context,
             )
         return result
     return _auto_ingest_two_call(
         file_path, file_content, file_type,
         schema_content, purpose_content,
         model_role, cfg['max_tokens'],
+        context,
     )
 
 

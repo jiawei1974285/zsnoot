@@ -1,11 +1,11 @@
 llm:
   provider: openai
-  temperature: 0.1
+  temperature: 1
   max_tokens: 8000
 ingest:
   single_call: true
   max_tokens: 8000
-  max_workers: 3
+  max_workers: 5
 embedding:
   enabled: false
   model: shibing624/text2vec-base-chinese
@@ -41,6 +41,8 @@ wiki:
   custom_categories:
   - key: type
     label: 违法犯罪类型
+  - key: organization
+    label: 组织机构
 server:
   host: 0.0.0.0
   port: 5004
@@ -52,14 +54,14 @@ vision_model:
   model: ''
   base_url: ''
   api_key: ''
-  temperature: 0.1
+  temperature: 0.5
   max_tokens: 8000
 ocr_model:
   provider: ''
   model: ''
   base_url: ''
   api_key: ''
-  temperature: 0.1
+  temperature: 0.5
   max_tokens: 8000
 agent:
   skills:

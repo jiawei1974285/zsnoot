@@ -230,10 +230,37 @@ def build_frontmatter(meta, body=''):
     return f'---\n{yaml_str}---\n{body}'
 
 
+def _wiki_import_index():
+    """Map generated wiki page paths to the latest ingest batch that produced them."""
+    batch_path = os.path.join(PROJECT_DIR, 'data', 'ingest_batches.json')
+    if not os.path.exists(batch_path):
+        return {}
+    try:
+        with open(batch_path, 'r', encoding='utf-8') as f:
+            batches = json.load(f)
+    except Exception:
+        return {}
+
+    index = {}
+    for batch in batches if isinstance(batches, list) else []:
+        imported_at = batch.get('updated_at') or batch.get('created_at') or ''
+        batch_id = batch.get('id') or ''
+        for rel_path in batch.get('generated_files') or []:
+            key = str(rel_path).replace('\\', '/').lstrip('./')
+            existing = index.get(key)
+            if not existing or str(imported_at) > str(existing.get('last_imported_at', '')):
+                index[key] = {
+                    'last_imported_at': imported_at,
+                    'last_import_batch_id': batch_id,
+                }
+    return index
+
+
 def get_wiki_pages(page_type=None):
     """获取 Wiki 页面列表"""
     pages = []
     search_dirs = [page_type] if page_type else get_wiki_subdirs()
+    import_index = _wiki_import_index()
     
     for subdir in search_dirs:
         dir_path = os.path.join(WIKI_DIR, subdir)
@@ -247,13 +274,17 @@ def get_wiki_pages(page_type=None):
                         content = f.read()
                     meta, body = parse_frontmatter(content)
                     slug = filename[:-3]  # 去掉 .md
+                    rel_path = f'wiki/{subdir}/{filename}'
+                    import_meta = import_index.get(rel_path, {})
                     pages.append({
                         'slug': slug,
                         'type': subdir,
                         'title': meta.get('title', slug),
-                        'path': f'wiki/{subdir}/{filename}',
+                        'path': rel_path,
                         'created': meta.get('created', ''),
                         'updated': meta.get('updated', ''),
+                        'last_imported_at': import_meta.get('last_imported_at', ''),
+                        'last_import_batch_id': import_meta.get('last_import_batch_id', ''),
                         'tags': meta.get('tags', []),
                         'related': meta.get('related', []),
                         'body_preview': body[:200] if body else ''
@@ -261,8 +292,14 @@ def get_wiki_pages(page_type=None):
                 except Exception:
                     continue
     
-    # 按更新时间排序（处理 datetime.date 和 str 混合类型）
-    pages.sort(key=lambda x: str(x.get('updated', '')), reverse=True)
+    pages.sort(
+        key=lambda x: (
+            str(x.get('last_imported_at') or ''),
+            str(x.get('updated') or ''),
+            str(x.get('created') or ''),
+        ),
+        reverse=True,
+    )
     return pages
 
 
@@ -641,45 +678,20 @@ def get_notes():
 
 @app.route('/api/notes', methods=['POST'])
 def create_note():
-    """创建新笔记（兼容旧 API，升级为 Wiki 页面）"""
-    data = request.json
-    title = data.get('title', '未命名笔记')
-    content = data.get('content', '')
-    auto_analyze = data.get('auto_analyze', True)  # 默认开启自动分析
-    
-    today = datetime.now().strftime('%Y-%m-%d')
-    slug = slugify(f"{today}-{title}")[:50]
-    
-    meta = {
-        'type': 'note',
-        'title': title,
-        'tags': data.get('tags', []),
-        'related': [],
-        'created': today,
-        'updated': today
-    }
-    
-    body = f"# {title}\n\n{content}\n"
-    
-    save_wiki_page(slug, 'notes', meta, body)
-    
-    result = {
-        'slug': slug,
-        'title': title,
-        'content': content,
-        'created': today
-    }
-    
-    # 自动分析笔记
-    if auto_analyze:
-        try:
-            from auto_ingest import auto_ingest
-            analysis_result = auto_ingest(slug, content, meta)
-            result['analysis'] = analysis_result
-        except Exception as e:
-            result['analysis_error'] = str(e)
-    
-    return jsonify(result)
+    """Create an agent-owned note and extract simple relations into wiki pages."""
+    data = request.json or {}
+    title = (data.get('title') or '').strip() or '未命名笔记'
+    content = (data.get('content') or '').strip()
+    tags = data.get('tags') or []
+
+    try:
+        from note_intake import build_note_pages
+
+        result = build_note_pages(PROJECT_DIR, title, content, tags=tags)
+        return jsonify(result)
+    except Exception as exc:
+        logger.exception("create note failed title=%s", title)
+        return jsonify({'error': f'创建笔记失败: {exc}'}), 500
 
 
 # ==================== Wiki API ====================
@@ -773,7 +785,6 @@ def api_update_wiki_page(slug):
 @app.route('/api/wiki/pages/<slug>', methods=['DELETE'])
 def api_delete_wiki_page(slug):
     """删除 Wiki 页面"""
-    return jsonify({'error': 'Wiki pages are agent-owned and read-only'}), 403
     page_type = request.args.get('type')
     page = get_wiki_page(slug, page_type)
 
@@ -960,6 +971,27 @@ def api_ingest_rollback(batch_id):
         return jsonify(result)
     except KeyError:
         return jsonify({'error': 'Batch not found'}), 404
+
+
+@app.route('/api/ingest/batches/<batch_id>/reparse', methods=['POST'])
+def api_ingest_reparse(batch_id):
+    """Re-run parsing for an existing batch and merge newly generated knowledge."""
+    from ingest_service import reparse_batch
+    try:
+        result = reparse_batch(batch_id, PROJECT_DIR)
+    except KeyError:
+        return jsonify({'error': 'Batch not found'}), 404
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    try:
+        from activity_log import record
+        record(PROJECT_DIR, 'reparse_batch', batch_id, {
+            'generated_count': len(result.get('generated_files', []) or []),
+            'entity_count': len(result.get('entities', []) or []),
+        })
+    except Exception:
+        pass
+    return jsonify(result)
 
 
 @app.route('/api/ingest/stale', methods=['GET'])
@@ -1184,7 +1216,7 @@ def api_chat():
         return jsonify({
             'query': query,
             'response': response,
-            'sources': [{'title': p['title'], 'type': p['type']} for p in relevant_pages],
+            'sources': serialize_chat_sources(relevant_pages),
             'mode': 'local_structured',
         })
     
@@ -1318,9 +1350,21 @@ def api_chat():
     return jsonify({
         'query': query,
         'response': response,
-        'sources': [{'title': p['title'], 'type': p['type']} for p in relevant_pages],
+        'sources': serialize_chat_sources(relevant_pages),
         'llm_error': llm_error,
     })
+
+
+def serialize_chat_sources(pages: List[Dict]) -> List[Dict]:
+    sources = []
+    for page in pages:
+        slug = page.get('slug')
+        page_type = page.get('type')
+        title = page.get('title') or slug
+        if not slug or not page_type:
+            continue
+        sources.append({'slug': slug, 'type': page_type, 'title': title})
+    return sources
 
 
 def auto_save_qa(query: str, response: str, sources: List[Dict]):

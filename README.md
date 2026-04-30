@@ -20,10 +20,10 @@
 
 | 模块 | 能力 |
 |---|---|
-| **材料入库** | 拖入 Word / PDF / Markdown / Excel / 图片 / 文本,自动解析、抽取实体、生成 wiki 页面、建立 `[[wiki-link]]`、按批次可回滚 |
-| **对话查询** | 基于本地知识库的 RAG 问答,带来源引用,问答结果自动沉淀为 outputs 类型记忆页 |
-| **整理后的知识** | 卡片视图浏览所有 wiki 页面,支持按类别筛选、分页大小自定义(12 / 24 / 48 / 96)、多选批量删除、单击查看 / 编辑 |
-| **新建笔记** | 一键创建空白 markdown 笔记并立即进入编辑器(标题输入 + Markdown textarea + 实时保存) |
+| **材料入库** | 拖入 Word / PDF / Markdown / Excel / 图片 / 文本,自动解析、抽取实体、生成 wiki 页面、建立 `[[wiki-link]]`、按批次可回滚，也可对历史批次再次解析并与既有知识合并 |
+| **对话查询** | 基于本地知识库的 RAG 问答,带可点击的知识来源引用,问答结果自动沉淀为 outputs 类型记忆页 |
+| **整理后的知识** | 卡片视图浏览所有 wiki 页面,支持按类别筛选、按最后导入/更新/创建/标题排序、分页大小自定义、多选批量删除、单击查看 |
+| **新建笔记** | 在上传材料下方提级显示，可输入标题、正文和标签，自动抽取人物关系并写入 notes/persons 页面和关系图谱 |
 | **关系图谱** | D3 力导向布局,支持 4 种排布(force / type / community / radial)。**单击节点**:① 一度邻居聚焦(其他淡化) ② 同时滑出该实体 wiki 详情抽屉。「重置视图」恢复全图 |
 | **知识库体检** | 检测断链、孤立页面、过期内容(>30 天未更新)。**一键修复**:按类别弹窗,勾选条目 + 选动作(删除链接 / 创建占位页 / 自动补充关联 / 标记独立 / 触发更新) |
 | **系统配置** | LLM 模型 / API key / 知识库路径 / 入库阈值 等可视化配置,支持模型连通性测试 |
@@ -173,7 +173,7 @@ mjq-handynotes/
 │   ├── package.json
 │   └── vite.config.js
 │
-├── tests/                      # Python 单元测试（30 个用例）
+├── tests/                      # Python 单元测试（治理、入库、图谱体检、文件解析等）
 ├── purpose.md                  # 产品目标
 ├── schema.md                   # wiki 数据结构规范
 └── README.md                   # 本文件
@@ -194,14 +194,15 @@ mjq-handynotes/
 | | `/api/auth/change-password` | POST | 修改密码 |
 | **管理** | `/api/admin/invites` | GET / POST | admin：列出 / 生成邀请码 |
 | | `/api/admin/invites/<code>` | DELETE | admin：撤销未用邀请码 |
-| **页面** | `/api/wiki/pages` | GET / POST | 列出 / 新建页面（支持 `?type=cases`） |
-| | `/api/wiki/pages/<slug>` | GET / PUT / DELETE | 读 / 改 / 删单页（带 backlinks/outlinks） |
+| **页面** | `/api/wiki/pages` | GET / POST | 列出页面；POST 当前保持只读保护（支持 `?type=cases`） |
+| | `/api/wiki/pages/<slug>` | GET / PUT / DELETE | 读 / 改 / 删单页（当前 PUT 只读保护，DELETE 可从知识卡片删除） |
 | | `/api/wiki/categories` | GET | 列出 wiki 子类目 |
 | | `/api/wiki/index` / `log` | GET | 读索引/日志 |
 | **入库** | `/api/ingest/upload` | POST | 上传材料并触发并发入库 |
 | | `/api/ingest/batches` | GET | 列出历史批次 |
 | | `/api/ingest/batches/<id>` | GET | 单批次详情 |
 | | `/api/ingest/batches/<id>/rollback` | POST | 回滚批次（删除产物） |
+| | `/api/ingest/batches/<id>/reparse` | POST | 复用归档原文再次解析，带历史结果上下文做补充抽取，并合并新实体/关系 |
 | | `/api/ingest/stale` | GET | 列出 status:待精炼 的 fallback 页面 |
 | | `/api/ingest/retry-stale` | POST | 重跑指定 stale 页面（成功后删原页） |
 | **检索** | `/api/search` | GET | 关键词加权检索 |

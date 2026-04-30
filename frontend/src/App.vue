@@ -175,7 +175,7 @@
             <button
               class="rail-button"
               :class="{ active: activeView === item.key, 'has-tree': item.key === 'knowledge' }"
-              @click="item.key === 'knowledge' ? toggleKnowledgeTree() : setActiveView(item.key)"
+              @click="handleNavItemClick(item)"
             >
               <el-icon><component :is="item.icon" /></el-icon>
               <span class="rail-label">{{ item.label }}</span>
@@ -524,6 +524,12 @@
                     <span class="row-actions">
                       <el-button size="small" :icon="FolderOpened" @click.stop="openBatchSourceFolder(batch)" />
                       <el-button size="small" :icon="View" @click.stop="openBatch(batch.id)" />
+                      <el-button
+                        size="small"
+                        :icon="Refresh"
+                        :loading="reparsingBatchSet.has(batch.id)"
+                        @click.stop="reparseBatch(batch)"
+                      >再次解析</el-button>
                       <el-button size="small" type="danger" plain :icon="Delete" :loading="deletingBatches" @click.stop="deleteBatch(batch)" />
                     </span>
                   </button>
@@ -555,7 +561,20 @@
             <div class="chat-layout">
               <div class="chat-messages">
                 <div v-for="message in messages" :key="message.id" class="message" :class="message.role">
-                  {{ message.content }}
+                  <div class="message-content">{{ message.content }}</div>
+                  <div v-if="message.role === 'assistant' && message.sources?.length" class="message-sources">
+                    <div class="message-sources-title">知识来源</div>
+                    <button
+                      v-for="source in message.sources"
+                      :key="`${source.type}-${source.slug}`"
+                      type="button"
+                      class="message-source-link"
+                      @click="openChatSource(source)"
+                    >
+                      <span>{{ source.title }}</span>
+                      <small>{{ typeLabel(source.type) }}</small>
+                    </button>
+                  </div>
                 </div>
               </div>
               <div class="chat-toolbar">
@@ -608,6 +627,8 @@
                   />
                 </el-select>
                 <el-select v-model="pageSortBy" style="width: 150px">
+                  <el-option label="最后导入" value="imported_desc" />
+                  <el-option label="最早导入" value="imported_asc" />
                   <el-option label="最近更新" value="updated_desc" />
                   <el-option label="最早更新" value="updated_asc" />
                   <el-option label="最近创建" value="created_desc" />
@@ -624,7 +645,7 @@
                 >全选本页</el-checkbox>
                 <span class="knowledge-count">已选 {{ selectedPageKeys.length }} 项</span>
                 <el-button
-                  v-if="!wikiReadOnly"
+                  v-if="canDeleteWikiPages"
                   size="small"
                   type="danger"
                   :disabled="!selectedPageKeys.length"
@@ -652,7 +673,7 @@
                   <el-tag size="small">{{ typeLabel(page.type) }}</el-tag>
                   <span class="page-item-path">{{ page.type }}/{{ page.slug }}</span>
                   <el-popconfirm
-                    v-if="!wikiReadOnly"
+                    v-if="canDeleteWikiPages"
                     title="确认删除该页面?(只删 markdown 文件,索引和反向链接不会自动清理)"
                     confirm-button-text="删除"
                     cancel-button-text="取消"
@@ -954,6 +975,10 @@
                 <el-form-item label="最大输出 Token">
                   <el-input-number v-model="configForm.llm.max_tokens" :min="512" :max="32000" :step="512" style="width: 100%" />
                 </el-form-item>
+                <el-form-item label="默认并发数">
+                  <el-input-number v-model="configForm.ingest.max_workers" :min="1" :max="16" :step="1" style="width: 100%" />
+                  <div class="form-help">默认 5 路并发，可按机器性能调整。</div>
+                </el-form-item>
               </section>
 
               <section class="config-card">
@@ -1222,6 +1247,31 @@
       </div>
     </el-drawer>
 
+    <el-dialog v-model="noteDialog" title="新建笔记" width="720px" destroy-on-close>
+      <el-form label-position="top">
+        <el-form-item label="标题">
+          <el-input v-model="noteForm.title" maxlength="80" placeholder="例如：走访记录 / 线索摘录 / 关系备注" />
+        </el-form-item>
+        <el-form-item label="内容">
+          <el-input
+            v-model="noteForm.content"
+            type="textarea"
+            :autosize="{ minRows: 8, maxRows: 16 }"
+            placeholder="输入笔记内容。示例：黄超和何思雨是夫妻。系统会自动抽取实体、关系并写入知识图谱。"
+          />
+        </el-form-item>
+        <el-form-item label="标签">
+          <el-input v-model="noteForm.tagsText" placeholder="多个标签用逗号分隔，例如：走访, 关系, 重点人员" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="noteDialog = false">取消</el-button>
+        <el-button type="primary" :loading="noteSubmitting" :disabled="!noteForm.content.trim()" @click="submitCreateNote">
+          创建并抽取
+        </el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog
       v-model="firstRunDialog"
       title="初始化设置"
@@ -1376,10 +1426,13 @@ import {
   View,
 } from '@element-plus/icons-vue'
 import { GRAPH_LAYOUTS, layoutTargets } from './graphLayouts'
+import { sortKnowledgePages } from './pageSorting'
+import { normalizeKnowledgeSources } from './chatSources'
 
 const navItems = [
   { key: 'home', label: '首页', icon: HomeFilled },
   { key: 'ingest', label: '上传材料', icon: Box },
+  { key: 'new-note', label: '新建笔记', icon: Plus },
   { key: 'chat', label: '对话查询', icon: ChatDotRound },
   { key: 'knowledge', label: '知识卡片', icon: Collection },
   { key: 'graph', label: '关系图谱', icon: Connection },
@@ -1451,6 +1504,7 @@ const faqItems = [
 ]
 const configSaving = ref(false)
 const wikiReadOnly = true
+const canDeleteWikiPages = true
 const configTesting = ref({ llm: false, vision_model: false, ocr_model: false })
 const agentStatus = ref({ state: 'idle', message: '空闲', updated_at: '' })
 const lint = ref({})
@@ -1483,9 +1537,13 @@ const uploadPreviewLimit = 5
 const uploading = ref(false)
 const currentBatch = ref(null)
 const batchDrawer = ref(false)
+const noteDialog = ref(false)
+const noteSubmitting = ref(false)
+const noteForm = ref({ title: '', content: '', tagsText: '' })
 const selectedBatch = ref(null)
 const expandedBatchId = ref(null)
 const selectedBatchIds = ref([])
+const reparsingBatchIds = ref([])
 const deletingBatches = ref(false)
 const knowledgeTreeExpanded = ref(true)
 const pageDrawer = ref(false)
@@ -1499,7 +1557,7 @@ const pageFilter = ref('all')
 const pageNumber = ref(1)
 const pageSize = ref(24)
 const pageSearch = ref('')
-const pageSortBy = ref('updated_desc') // updated_desc | updated_asc | created_desc | title_asc
+const pageSortBy = ref('imported_desc')
 const selectedPageKeys = ref([])
 const messages = ref([
   { id: 1, role: 'assistant', content: '可以直接问我：某个小区最近有哪些警情，某名人员关联了哪些案件，或者这批材料里有什么线索。' },
@@ -1635,6 +1693,7 @@ const pagedBatches = computed(() => {
   return batches.value.slice(start, start + batchPageSize.value)
 })
 const selectedBatchSet = computed(() => new Set(selectedBatchIds.value))
+const reparsingBatchSet = computed(() => new Set(reparsingBatchIds.value))
 const allPagedBatchesSelected = computed(() => {
   if (!pagedBatches.value.length) return false
   return pagedBatches.value.every((batch) => selectedBatchSet.value.has(batch.id))
@@ -1654,24 +1713,7 @@ const filteredPages = computed(() => {
       return title.includes(kw) || preview.includes(kw) || slug.includes(kw) || tags.includes(kw)
     })
   }
-  // 排序：复制后再排，避免修改原数组（pages 是源数据）
-  const sorted = list.slice()
-  const cmp = (a, b, key) => String(a[key] || '').localeCompare(String(b[key] || ''))
-  switch (pageSortBy.value) {
-    case 'updated_asc':
-      sorted.sort((a, b) => cmp(a, b, 'updated'))
-      break
-    case 'created_desc':
-      sorted.sort((a, b) => cmp(b, a, 'created'))
-      break
-    case 'title_asc':
-      sorted.sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''), 'zh-CN'))
-      break
-    case 'updated_desc':
-    default:
-      sorted.sort((a, b) => cmp(b, a, 'updated'))
-  }
-  return sorted
+  return sortKnowledgePages(list, pageSortBy.value)
 })
 
 const pagedPages = computed(() => {
@@ -2213,6 +2255,16 @@ function setActiveView(view) {
   }
 }
 
+function handleNavItemClick(item) {
+  if (item.key === 'knowledge') {
+    toggleKnowledgeTree()
+  } else if (item.key === 'new-note') {
+    createNewNote()
+  } else {
+    setActiveView(item.key)
+  }
+}
+
 // === 邀请码管理 ===
 async function loadInvites() {
   try {
@@ -2510,26 +2562,20 @@ function renderGraph() {
     .forceSimulation(nodes)
     .force('link', d3.forceLink(links).id((item) => item.id).distance((edge) => graphLinkDistance(nodes.length, edge)))
     .force('charge', d3.forceManyBody().strength(graphChargeStrength(nodes.length)))
-    .force('center', d3.forceCenter(width / 2, height / 2))
+    .force('center', d3.forceCenter(width / 2, height / 2).strength(0.02))
     .force('collide', d3.forceCollide().radius((item) => item.radius + graphCollisionGap(nodes.length)))
-    .force('boundsX', d3.forceX((item) => graphBoundaryTarget(item.x, width, padding)).strength(graphBoundaryStrength(nodes.length)))
-    .force('boundsY', d3.forceY((item) => graphBoundaryTarget(item.y, height, padding)).strength(graphBoundaryStrength(nodes.length)))
 
   if (graphLayout.value !== 'force') {
     simulation
-      .force('x', d3.forceX((item) => targets.get(item.id)?.x || width / 2).strength(0.28))
-      .force('y', d3.forceY((item) => targets.get(item.id)?.y || height / 2).strength(0.28))
+      .force('x', d3.forceX((item) => targets.get(item.id)?.x || width / 2).strength(0.18))
+      .force('y', d3.forceY((item) => targets.get(item.id)?.y || height / 2).strength(0.18))
   } else {
     simulation
-      .force('x', d3.forceX(width / 2).strength(0.025))
-      .force('y', d3.forceY(height / 2).strength(0.025))
+      .force('x', d3.forceX(width / 2).strength(0.012))
+      .force('y', d3.forceY(height / 2).strength(0.012))
   }
 
   const ticked = () => {
-    nodes.forEach((item) => {
-      item.x = clamp(item.x, padding, width - padding)
-      item.y = clamp(item.y, padding, height - padding)
-    })
     link
       .attr('x1', (edge) => edge.source.x)
       .attr('y1', (edge) => edge.source.y)
@@ -2557,7 +2603,7 @@ function renderGraph() {
     applyFocus(selectedId)
     requestAnimationFrame(() => centerClickedNodeNeighborhood(selectedId))
   } else {
-    resetGraphZoom()
+    requestAnimationFrame(() => fitGraphToViewport())
   }
 }
 
@@ -2572,11 +2618,11 @@ function graphViewportDimensions(count) {
   const rect = graphCanvasRef.value?.getBoundingClientRect()
   const visibleWidth = Math.max(720, Math.floor(rect?.width || 1100))
   const visibleHeight = Math.max(560, Math.floor(rect?.height || 700))
-  const spread = Math.max(1, Math.sqrt(Math.max(count, 1) / 55))
-  const padding = count > 180 ? 240 : count > 90 ? 220 : 180
+  const spread = Math.max(1, Math.sqrt(Math.max(count, 1) / 32))
+  const padding = count > 180 ? 320 : count > 90 ? 280 : 220
   return {
-    width: Math.round(Math.max(visibleWidth, visibleWidth * Math.min(3.1, spread))),
-    height: Math.round(Math.max(visibleHeight, visibleHeight * Math.min(2.8, spread * 0.98))),
+    width: Math.round(Math.max(visibleWidth * 1.18, visibleWidth * Math.min(4.6, spread * 1.9))),
+    height: Math.round(Math.max(visibleHeight * 1.12, visibleHeight * Math.min(3.8, spread * 1.55))),
     padding,
   }
 }
@@ -2587,9 +2633,7 @@ function graphLinkDistance(count, edge) {
 }
 
 function graphNodeRadius(count) {
-  if (count > 180) return 8
-  if (count > 90) return 9
-  return 10
+  return count > 180 ? 6 : 7
 }
 
 function graphChargeStrength(count) {
@@ -2610,17 +2654,6 @@ function graphLabelLength(count) {
   if (count > 90) return 6
   if (count > 55) return 8
   return 10
-}
-
-function graphBoundaryTarget(value, size, padding) {
-  if (!Number.isFinite(value)) return size / 2
-  return clamp(value, padding, size - padding)
-}
-
-function graphBoundaryStrength(count) {
-  if (graphLayout.value !== 'force') return 0.08
-  if (count > 120) return 0.14
-  return 0.1
 }
 
 function seedGraphPositions(nodes, links, width, height, padding) {
@@ -2716,6 +2749,27 @@ function centerClickedNodeNeighborhood(nodeId) {
   d3.select(graphSvgRef.value).transition().duration(420).call(graphZoomBehavior.transform, transform)
 }
 
+function fitGraphToViewport() {
+  if (!graphSvgRef.value || !graphZoomBehavior || !graphLastLayout.nodes.length) return
+  const positioned = graphLastLayout.nodes.filter((node) => Number.isFinite(node.x) && Number.isFinite(node.y))
+  if (!positioned.length) return
+  const pad = 120
+  const minX = d3.min(positioned, (node) => node.x - (node.radius || 12)) - pad
+  const maxX = d3.max(positioned, (node) => node.x + (node.radius || 12)) + pad
+  const minY = d3.min(positioned, (node) => node.y - (node.radius || 12)) - pad
+  const maxY = d3.max(positioned, (node) => node.y + (node.radius || 12)) + pad
+  const boxWidth = Math.max(240, maxX - minX)
+  const boxHeight = Math.max(240, maxY - minY)
+  const { width, height } = graphLastLayout
+  const scale = clamp(Math.min((width * 0.9) / boxWidth, (height * 0.9) / boxHeight), 0.14, 1.2)
+  const centerX = (minX + maxX) / 2
+  const centerY = (minY + maxY) / 2
+  const transform = d3.zoomIdentity
+    .translate(width / 2 - centerX * scale, height / 2 - centerY * scale)
+    .scale(scale)
+  d3.select(graphSvgRef.value).transition().duration(260).call(graphZoomBehavior.transform, transform)
+}
+
 function clearGraphFilters() {
   graphSearch.value = ''
   graphTypeFilter.value = 'all'
@@ -2730,7 +2784,7 @@ function nudgeGraphZoom(scale) {
 
 function resetGraphZoom() {
   if (!graphSvgRef.value || !graphZoomBehavior) return
-  d3.select(graphSvgRef.value).transition().duration(220).call(graphZoomBehavior.transform, d3.zoomIdentity)
+  fitGraphToViewport()
 }
 
 function clamp(value, min, max) {
@@ -2914,26 +2968,44 @@ async function openPagePreview(page) {
 async function createNewNote() {
   const ts = new Date()
   const pad = (n) => String(n).padStart(2, '0')
-  const slug = `note-${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}-${pad(ts.getHours())}${pad(ts.getMinutes())}${pad(ts.getSeconds())}`
-  const title = `新建笔记 ${ts.getFullYear()}-${pad(ts.getMonth() + 1)}-${pad(ts.getDate())} ${pad(ts.getHours())}:${pad(ts.getMinutes())}`
+  noteForm.value = {
+    title: `新建笔记 ${ts.getFullYear()}-${pad(ts.getMonth() + 1)}-${pad(ts.getDate())} ${pad(ts.getHours())}:${pad(ts.getMinutes())}`,
+    content: '',
+    tagsText: '',
+  }
+  noteDialog.value = true
+}
+
+async function submitCreateNote() {
+  noteSubmitting.value = true
   try {
-    await api('/api/wiki/pages', {
+    const tags = noteForm.value.tagsText
+      .split(/[,，]/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+    const result = await api('/api/notes', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        slug,
-        type: 'notes',
-        meta: { title, tags: [], related: [] },
-        body: '',
+        title: noteForm.value.title,
+        content: noteForm.value.content,
+        tags,
       }),
     })
-    selectedPage.value = await api(`/api/wiki/pages/${encodeURIComponent(slug)}?type=notes`)
-    pageEditDraft.value = { title, body: '' }
-    pageEditMode.value = true
-    pageDrawer.value = true
+    noteDialog.value = false
+    setActiveView('knowledge')
     await loadPages()
+    selectedPage.value = await api(`/api/wiki/pages/${encodeURIComponent(result.slug)}?type=notes`)
+    pageEditMode.value = false
+    pageDrawer.value = true
+    if (graph.value.nodes.length || activeView.value === 'graph') {
+      await loadGraph()
+    }
+    ElMessage.success(`笔记已创建，抽取 ${result.relations?.length || 0} 条关系`)
   } catch (error) {
     ElMessage.error(error.message)
+  } finally {
+    noteSubmitting.value = false
   }
 }
 
@@ -3046,6 +3118,13 @@ async function openPageBySlug(slug) {
   }
 }
 
+async function openChatSource(source) {
+  if (!source?.slug || !source?.type) return
+  setActiveView(source.type === 'outputs' ? 'chat' : 'knowledge')
+  pageFilter.value = source.type
+  await openPagePreview(source)
+}
+
 function handleMarkdownClick(event) {
   const target = event.target
   if (target?.classList?.contains('wiki-link')) {
@@ -3066,6 +3145,26 @@ async function rollbackBatch(batch) {
   await refreshAll()
 }
 
+async function reparseBatch(batch) {
+  if (!batch?.id || reparsingBatchSet.value.has(batch.id)) return
+  reparsingBatchIds.value = [...reparsingBatchIds.value, batch.id]
+  try {
+    const result = await api(`/api/ingest/batches/${encodeURIComponent(batch.id)}/reparse`, { method: 'POST' })
+    ElMessage.success(`再次解析完成：已合并 ${result.generated_files?.length || 0} 个知识页、${result.entities?.length || 0} 个实体`)
+    if (selectedBatch.value?.id === batch.id) {
+      selectedBatch.value = result
+    }
+    await Promise.all([loadBatches(), loadPages(), loadHome()])
+    if (activeView.value === 'graph') {
+      await loadGraph()
+    }
+  } catch (error) {
+    ElMessage.error(error.message)
+  } finally {
+    reparsingBatchIds.value = reparsingBatchIds.value.filter((id) => id !== batch.id)
+  }
+}
+
 async function sendChat() {
   const query = chatInput.value.trim()
   if (!query) return
@@ -3079,8 +3178,12 @@ async function sendChat() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query }),
     })
-    const sources = result.sources?.length ? `\n\n来源：${result.sources.map((source) => source.title).join('、')}` : ''
-    messages.value.push({ id: id + 1, role: 'assistant', content: `${result.response}${sources}` })
+    messages.value.push({
+      id: id + 1,
+      role: 'assistant',
+      content: result.response,
+      sources: normalizeKnowledgeSources(result.sources),
+    })
     await loadPages()
   } catch (error) {
     messages.value.push({ id: id + 1, role: 'assistant', content: `查询失败：${error.message}` })
@@ -3309,6 +3412,9 @@ function defaultConfig() {
         { enabled: true, name: '实体分类', description: '根据 schema 和自定义目录选择实体类型', trigger: '入库生成 wiki 页面' },
       ],
     },
+    ingest: {
+      max_workers: 5,
+    },
     watcher: {
       inbox_dir: 'raw/inbox',
     },
@@ -3344,6 +3450,7 @@ function normalizeConfig(raw) {
           }))
         : defaults.agent.skills,
     },
+    ingest: { ...defaults.ingest, ...(raw?.ingest || {}) },
     watcher: { ...defaults.watcher, ...(raw?.watcher || {}) },
     wiki: {
       ...defaults.wiki,
