@@ -1,0 +1,98 @@
+# ════════════════════════════════════════════════════════════════
+# Sensitive credentials & secrets
+# ════════════════════════════════════════════════════════════════
+.env
+.env.*
+!.env.example
+config/secret.key
+
+# ════════════════════════════════════════════════════════════════
+# Runtime / user data (may contain PII, password hashes, prompts)
+# ════════════════════════════════════════════════════════════════
+data/
+notes.db
+embeddings/
+
+# Uploaded raw materials
+raw/
+
+# Legacy data dirs (pre-wiki/ migration)
+cases/
+persons/
+locations/
+laws/
+images/
+
+# Generated wiki content (user knowledge base) - keep templates only
+wiki/*
+!wiki/templates/
+!wiki/templates/**
+!wiki/.gitkeep
+
+# ════════════════════════════════════════════════════════════════
+# Logs
+# ════════════════════════════════════════════════════════════════
+mjq.log
+mjq.log.*
+*.pid
+flask-backend.*.log
+server.*.log
+server.vite.*.log
+server.output
+nohup.out
+
+# ════════════════════════════════════════════════════════════════
+# Python
+# ════════════════════════════════════════════════════════════════
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# ════════════════════════════════════════════════════════════════
+# Node / frontend build artifacts
+# ════════════════════════════════════════════════════════════════
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/*.log
+frontend/.eslintcache
+frontend/coverage/
+node_modules/
+*.tsbuildinfo
+
+# ════════════════════════════════════════════════════════════════
+# IDE / editor state
+# ════════════════════════════════════════════════════════════════
+.claude/
+.trae/
+.vscode/
+.idea/
+.cursor/
+*.swp
+*.swo
+
+# ════════════════════════════════════════════════════════════════
+# Project planning artifacts (private notes)
+# ════════════════════════════════════════════════════════════════
+docs/plans/
+
+# ════════════════════════════════════════════════════════════════
+# Test artifacts (generated mock data, screenshots)
+# 保留 tests/generate_mock_data.py，用它现场生成
+# ════════════════════════════════════════════════════════════════
+tests/mock_data/
+tests/login_screenshot.png
+tests/__pycache__/
+
+# ════════════════════════════════════════════════════════════════
+# OS junk
+# ════════════════════════════════════════════════════════════════
+.DS_Store
+Thumbs.db
+desktop.ini

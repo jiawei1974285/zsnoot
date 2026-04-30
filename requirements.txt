@@ -1,0 +1,26 @@
+# 知枢 · Python 依赖
+# 测试环境: Python 3.10 - 3.14
+# 安装: pip install -r requirements.txt
+
+# === Web 框架 + 鉴权 ===
+Flask>=3.0           # Web 框架（自带 Werkzeug 提供密码哈希）
+
+# === 配置与序列化 ===
+PyYAML>=6.0          # config/config.yaml + frontmatter 解析
+
+# === HTTP 客户端 (LLM 调用 / 模型连通性测试) ===
+requests>=2.31
+
+# === 文件系统监听 (可选自动入库) ===
+watchdog>=4.0
+
+# === 文档解析（file_parser.py 按需懒加载，缺哪个就装哪个） ===
+python-docx>=1.1     # .docx 文档
+python-pptx>=0.6     # .pptx 演示文稿（缺失时自动回退到 XML 解析）
+PyMuPDF>=1.24        # .pdf 解析（import fitz）
+pandas>=2.2          # .xlsx / .csv 表格
+openpyxl>=3.1        # pandas 读写 Excel 的引擎
+Pillow>=10.0         # 图片处理（import PIL）
+
+# === 可选：图片 OCR（默认不启用；启用前需先装 Tesseract 二进制） ===
+# pytesseract>=0.3   # 图片 OCR

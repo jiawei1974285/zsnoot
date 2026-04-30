@@ -1,0 +1,73 @@
+llm:
+  provider: openai
+  temperature: 0.1
+  max_tokens: 8000
+ingest:
+  single_call: true
+  max_tokens: 8000
+  max_workers: 3
+embedding:
+  enabled: false
+  model: shibing624/text2vec-base-chinese
+  dimensions: 768
+watcher:
+  inbox_dir: raw/inbox
+  interval: 5
+  supported_extensions:
+  - .md
+  - .txt
+  - .docx
+  - .pdf
+  - .xlsx
+  - .jpg
+  - .png
+wiki:
+  wiki_dir: wiki
+  embeddings_dir: embeddings
+  auto_wikilink: true
+  auto_extract: true
+  default_categories:
+  - persons
+  - locations
+  - organizations
+  - events
+  - evidence
+  - case_summaries
+  - crime_patterns
+  - conclusions
+  - outputs
+  - notes
+  - laws
+  custom_categories:
+  - key: type
+    label: 违法犯罪类型
+server:
+  host: 0.0.0.0
+  port: 5004
+  debug: false
+raw_dir: ''
+first_run_done: true
+vision_model:
+  provider: ''
+  model: ''
+  base_url: ''
+  api_key: ''
+  temperature: 0.1
+  max_tokens: 8000
+ocr_model:
+  provider: ''
+  model: ''
+  base_url: ''
+  api_key: ''
+  temperature: 0.1
+  max_tokens: 8000
+agent:
+  skills:
+  - enabled: true
+    name: OCR 预检
+    description: 识别图片、扫描 PDF、正文为空的材料
+    trigger: 图片/扫描PDF/解析为空
+  - enabled: true
+    name: 实体分类
+    description: 根据 schema 和自定义目录选择实体类型
+    trigger: 入库生成 wiki 页面
