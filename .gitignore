@@ -45,6 +45,8 @@ nohup.out
 # Python
 # ════════════════════════════════════════════════════════════════
 __pycache__/
+/.test-tmp/
+/test-tmp/
 *.py[cod]
 *$py.class
 *.egg-info/

@@ -99,6 +99,15 @@ def model_role_hint(file_type: str) -> str:
     return '当前材料已解析为文本，优先使用文本模型；只有遇到图片语义或 OCR 需求时再切换模型。'
 
 
+CONFLICT_POLICY = """
+## Conflict policy
+
+If sources disagree about identity, time, location, amount, role, or case facts, do not silently merge them.
+Every affected page must include `conflicts: []` in frontmatter when there is no disagreement.
+When there is disagreement, include `conflicts: [...]` in frontmatter and a `## Conflicts` section listing each claim, source, and unresolved/resolved status.
+"""
+
+
 def normalize_generated_file_path(block: Dict) -> str:
     """Route generated pages by frontmatter type into stable wiki directories."""
     rel_path = (block.get('path') or '').strip().replace('\\', '/')
@@ -176,6 +185,8 @@ def build_analysis_prompt(schema_content: str, purpose_content: str, file_conten
 ## 模型选择提示
 
 {role_hint}
+
+{CONFLICT_POLICY}
 
 ## 自定义页面类型
 
@@ -260,6 +271,8 @@ def build_generation_prompt(schema_content: str, analysis: Dict, file_content: s
 自定义类型对应目录：
 {custom_dir_text}
 
+{CONFLICT_POLICY}
+
 ## 输出格式
 
 ```
@@ -337,6 +350,8 @@ def build_unified_prompt(schema_content: str, purpose_content: str, file_content
 ## 模型选择提示
 
 {role_hint}
+
+{CONFLICT_POLICY}
 
 ## 自定义页面类型
 
@@ -487,6 +502,14 @@ def _write_blocks_to_disk(file_blocks: List[Dict]) -> List[str]:
         with open(full_path, 'w', encoding='utf-8') as f:
             f.write(content)
         generated_files.append(rel_path)
+        try:
+            from activity_log import record
+            record(PROJECT_DIR, 'agent_generate_page', rel_path, {
+                'title': (block.get('meta') or {}).get('title'),
+                'type': (block.get('meta') or {}).get('type'),
+            })
+        except Exception as exc:
+            logger.warning("record agent_generate_page failed path=%s: %s", rel_path, exc)
     return generated_files
 
 

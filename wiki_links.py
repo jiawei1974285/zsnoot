@@ -8,7 +8,22 @@ from typing import Dict, List, Optional
 import yaml
 
 
-WIKI_DIRS = ["cases", "persons", "locations", "laws", "techniques", "notes", "summaries", "outputs"]
+WIKI_DIRS = [
+    "cases",
+    "persons",
+    "locations",
+    "organizations",
+    "events",
+    "evidence",
+    "case_summaries",
+    "crime_patterns",
+    "conclusions",
+    "laws",
+    "techniques",
+    "notes",
+    "summaries",
+    "outputs",
+]
 
 
 def extract_wikilinks(content: str) -> List[str]:
@@ -78,6 +93,17 @@ def ensure_bidirectional_links(project_dir: str, generated_files: List[str]) -> 
             if append_backlink(target_path, source_slug):
                 added += 1
                 touched.append(os.path.relpath(target_path, root).replace("\\", "/"))
+
+    if added:
+        try:
+            from activity_log import record
+            record(project_dir, "agent_update_backlinks", None, {
+                "added": added,
+                "touched": touched,
+                "sources": generated_files,
+            })
+        except Exception:
+            pass
 
     return {"added": added, "touched": touched}
 

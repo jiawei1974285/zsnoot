@@ -25,6 +25,10 @@ logger = get_logger(__name__)
 
 WIKI_PREFIX = "wiki/"
 
+
+class RawIntegrityError(RuntimeError):
+    """Raised when an archived raw source is missing or has changed."""
+
 ENTITY_TYPE_ALIASES = {
     "organizations": "organization",
     "events": "event",
@@ -53,6 +57,34 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _resolve_archived_path(item: Dict, project_dir: Path) -> Path:
+    raw_path = Path(str(item.get("path") or ""))
+    return raw_path if raw_path.is_absolute() else project_dir / raw_path
+
+
+def _raw_metadata(path: Path) -> Dict:
+    stat = path.stat()
+    return {
+        "sha256": file_sha256(path),
+        "size": stat.st_size,
+        "archived_at": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+def verify_archived_files(archived: Iterable[Dict], project_dir: str) -> None:
+    root = Path(project_dir)
+    for item in archived:
+        path = _resolve_archived_path(item, root)
+        if not path.exists() or not path.is_file():
+            raise RawIntegrityError(f"Raw source missing: {item.get('path')}")
+        expected_hash = item.get("sha256")
+        expected_size = item.get("size")
+        if expected_hash and file_sha256(path) != expected_hash:
+            raise RawIntegrityError(f"Raw source changed: {item.get('path')}")
+        if expected_size is not None and path.stat().st_size != expected_size:
+            raise RawIntegrityError(f"Raw source size changed: {item.get('path')}")
+
+
 def archive_uploads(files: Iterable, batch_id: str, project_dir: str) -> List[Dict]:
     from config_store import get_raw_dir
 
@@ -71,12 +103,13 @@ def archive_uploads(files: Iterable, batch_id: str, project_dir: str) -> List[Di
             target = batch_dir / f"{stem}-{counter}{suffix}"
             counter += 1
         file_obj.save(str(target))
+        metadata = _raw_metadata(target)
         # 若 raw 在项目外,path 用绝对路径;否则用相对路径以便和老批次记录兼容
         try:
             rel = _rel_path(target, root)
-            archived.append({"name": filename, "path": rel})
+            archived.append({"name": filename, "path": rel, **metadata})
         except ValueError:
-            archived.append({"name": filename, "path": str(target)})
+            archived.append({"name": filename, "path": str(target), **metadata})
 
     return archived
 
@@ -275,6 +308,7 @@ def _run_pipeline_on_archived(
     """
     from agent_status import set_status
 
+    verify_archived_files(archived, project_dir)
     runtime = _ingest_runtime_config(project_dir)
     max_workers = min(runtime["max_workers"], max(1, len(archived)))
     total = len(archived)
@@ -516,7 +550,9 @@ def retry_stale_notes(
         else:
             rel_src = src_path.as_posix()
         name = src_path.name
-        archived.append({"name": name, "path": rel_src})
+        abs_src = src_path if src_path.is_absolute() else root / rel_src
+        metadata = _raw_metadata(abs_src)
+        archived.append({"name": name, "path": rel_src, **metadata})
         archived_to_stale[rel_src] = s["stale_path"]
 
     if not archived:

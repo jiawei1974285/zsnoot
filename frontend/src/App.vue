@@ -624,6 +624,7 @@
                 >全选本页</el-checkbox>
                 <span class="knowledge-count">已选 {{ selectedPageKeys.length }} 项</span>
                 <el-button
+                  v-if="!wikiReadOnly"
                   size="small"
                   type="danger"
                   :disabled="!selectedPageKeys.length"
@@ -651,6 +652,7 @@
                   <el-tag size="small">{{ typeLabel(page.type) }}</el-tag>
                   <span class="page-item-path">{{ page.type }}/{{ page.slug }}</span>
                   <el-popconfirm
+                    v-if="!wikiReadOnly"
                     title="确认删除该页面?(只删 markdown 文件,索引和反向链接不会自动清理)"
                     confirm-button-text="删除"
                     cancel-button-text="取消"
@@ -1258,7 +1260,7 @@
           <el-tag>{{ typeLabel(selectedPage.type) }}</el-tag>
           <h2 v-if="!pageEditMode">{{ selectedPage.meta?.title || selectedPage.title || selectedPage.slug }}</h2>
           <p>{{ selectedPage.meta?.updated || selectedPage.meta?.created || '' }}</p>
-          <div class="page-preview-actions">
+          <div v-if="!wikiReadOnly" class="page-preview-actions">
             <template v-if="!pageEditMode">
               <el-button size="small" :icon="EditPen" @click="startEditPage">编辑</el-button>
             </template>
@@ -1448,6 +1450,7 @@ const faqItems = [
   { q: '我能不能改 LLM 模型？', a: '在「系统配置」最上方修改文本/视觉/OCR 模型的 base_url、模型名和 API key，保存后点「测试连接」确认通畅。' },
 ]
 const configSaving = ref(false)
+const wikiReadOnly = true
 const configTesting = ref({ llm: false, vision_model: false, ocr_model: false })
 const agentStatus = ref({ state: 'idle', message: '空闲', updated_at: '' })
 const lint = ref({})

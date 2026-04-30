@@ -7,6 +7,8 @@ from flask import Flask, render_template, request, jsonify, send_from_directory,
 from typing import List, Dict
 import os
 import secrets
+import uuid
+import hashlib
 import yaml
 import re
 import json
@@ -710,6 +712,7 @@ def api_wiki_page(slug):
 @app.route('/api/wiki/pages', methods=['POST'])
 def api_create_wiki_page():
     """创建 Wiki 页面"""
+    return jsonify({'error': 'Wiki pages are agent-owned and read-only'}), 403
     data = request.json
     slug = data.get('slug', slugify(data.get('title', 'untitled')))
     page_type = data.get('type', 'notes')
@@ -739,6 +742,7 @@ def api_create_wiki_page():
 @app.route('/api/wiki/pages/<slug>', methods=['PUT'])
 def api_update_wiki_page(slug):
     """更新 Wiki 页面"""
+    return jsonify({'error': 'Wiki pages are agent-owned and read-only'}), 403
     data = request.json
     page_type = data.get('type')
 
@@ -769,6 +773,7 @@ def api_update_wiki_page(slug):
 @app.route('/api/wiki/pages/<slug>', methods=['DELETE'])
 def api_delete_wiki_page(slug):
     """删除 Wiki 页面"""
+    return jsonify({'error': 'Wiki pages are agent-owned and read-only'}), 403
     page_type = request.args.get('type')
     page = get_wiki_page(slug, page_type)
 
@@ -1321,10 +1326,10 @@ def api_chat():
 def auto_save_qa(query: str, response: str, sources: List[Dict]):
     """自动将问答结果存回 wiki，形成复利循环"""
     from datetime import datetime
-    import re
-    
-    today = datetime.now().strftime('%Y-%m-%d')
-    slug = slugify(f"qa-{today}-{query[:20]}")
+    now = datetime.now()
+    today = now.strftime('%Y-%m-%d')
+    query_hash = hashlib.sha256(query.encode('utf-8')).hexdigest()[:12]
+    slug = slugify(f"qa-{now.strftime('%Y%m%d%H%M%S')}-{query_hash}-{uuid.uuid4().hex[:8]}")
     
     # 构建引用链接
     related = [f"[[{p['slug']}]]" for p in sources]
@@ -1336,12 +1341,23 @@ def auto_save_qa(query: str, response: str, sources: List[Dict]):
         'related': related,
         'created': today,
         'updated': today,
-        'query': query
+        'query': query,
+        'query_hash': query_hash,
     }
     
     body = f"# 问答：{query}\n\n## 问题\n\n{query}\n\n## 回答\n\n{response}\n\n## 参考来源\n\n{', '.join(related)}\n"
     
-    save_wiki_page(slug, 'outputs', meta, body)
+    path = save_wiki_page(slug, 'outputs', meta, body)
+    try:
+        from activity_log import record
+        record(PROJECT_DIR, 'agent_save_output', slug, {
+            'query_hash': query_hash,
+            'source_count': len(sources),
+            'path': os.path.relpath(path, PROJECT_DIR).replace('\\', '/'),
+        })
+    except Exception:
+        pass
+    return {'slug': slug, 'type': 'outputs', 'path': path, 'meta': meta}
 
 
 # ==================== 手动分析 API ====================
@@ -1579,6 +1595,16 @@ def api_lint_fix():
                     failed.append({'item': item, 'error': f'stale_pages 不支持动作: {action}'})
             except Exception as exc:  # noqa: BLE001
                 failed.append({'item': item, 'error': str(exc)})
+
+    try:
+        from activity_log import record
+        record(PROJECT_DIR, 'agent_lint_fix', category, {
+            'succeeded': len(succeeded),
+            'failed': len(failed),
+            'actions': [item.get('action') for item in items if isinstance(item, dict)],
+        })
+    except Exception:
+        pass
 
     return jsonify({
         'status': 'completed',
