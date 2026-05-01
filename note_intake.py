@@ -7,6 +7,29 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 
+WEB_ARTICLE_EXTRACTION_GUIDE = """WEB_ARTICLE_DEEP_EXTRACTION
+
+This source is a web article. Analyze it as structured source material.
+Do not save every finding as type: note.
+Extract concrete people, organizations, places, events, evidence, conclusions, crime patterns, cases, laws, techniques, and explicit relationships.
+
+Allowed type to directory mapping:
+- case -> wiki/cases/
+- person -> wiki/persons/
+- location -> wiki/locations/
+- organization -> wiki/organizations/
+- event -> wiki/events/
+- evidence -> wiki/evidence/
+- case_summary -> wiki/case_summaries/
+- crime_pattern -> wiki/crime_patterns/
+- conclusion -> wiki/conclusions/
+- law -> wiki/laws/
+- technique -> wiki/techniques/
+- note -> wiki/notes/
+- summary -> wiki/summaries/
+"""
+
+
 RELATION_WORDS = [
     "夫妻",
     "夫妇",
@@ -93,7 +116,7 @@ def _archive_article_source(project_dir: str, note_slug: str, title: str, conten
     raw_dir = os.path.join(project_dir, "raw", "web")
     os.makedirs(raw_dir, exist_ok=True)
     raw_path = os.path.join(raw_dir, f"{note_slug}.md")
-    parts = [f"# {title}", ""]
+    parts = [WEB_ARTICLE_EXTRACTION_GUIDE.strip(), "", f"# {title}", ""]
     if source_url:
         parts.extend([f"Source URL: {source_url}", ""])
     parts.append(content.strip())
@@ -112,7 +135,7 @@ def deep_extract_article(project_dir: str, note_slug: str, title: str, content: 
     auto_ingest_module.PROJECT_DIR = project_dir
     auto_ingest_module.WIKI_DIR = os.path.join(project_dir, "wiki")
     try:
-        result = auto_ingest_module.auto_ingest(archived["path"], archived["content"], ".md")
+        result = auto_ingest_module.auto_ingest(archived["path"], archived["content"], ".web.md")
     finally:
         if previous_project_dir is not None:
             auto_ingest_module.PROJECT_DIR = previous_project_dir

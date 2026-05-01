@@ -246,8 +246,50 @@ class GovernanceTests(unittest.TestCase):
         self.assertIn("https://mp.weixin.qq.com/s/example", archived.read_text(encoding="utf-8"))
         auto_ingest.assert_called_once()
         args = auto_ingest.call_args.args
-        self.assertEqual(args[2], ".md")
+        self.assertEqual(args[2], ".web.md")
         self.assertIn("Person A joined Company B", args[1])
+
+    def test_web_article_deep_extract_adds_classification_instructions(self):
+        import app
+        import note_intake
+
+        self._tmp = make_tmp_dir("web-article-instructions")
+        wiki_dir = self._tmp / "wiki"
+        for subdir in app.DEFAULT_WIKI_SUBDIRS:
+            (wiki_dir / subdir).mkdir(parents=True, exist_ok=True)
+        (wiki_dir / "log.md").write_text("# log\n", encoding="utf-8")
+
+        with mock.patch.object(app, "PROJECT_DIR", str(self._tmp)), \
+             mock.patch.object(app, "WIKI_DIR", str(wiki_dir)), \
+             mock.patch("auto_ingest.auto_ingest", return_value={"status": "success", "analysis": {}, "generated_files": []}) as auto_ingest:
+            note_intake.deep_extract_article(
+                str(self._tmp),
+                "article-note",
+                "Article Title",
+                "Person A founded Company B in Beijing.",
+                "https://mp.weixin.qq.com/s/example",
+            )
+
+        args = auto_ingest.call_args.args
+        self.assertEqual(args[2], ".web.md")
+        self.assertIn("WEB_ARTICLE_DEEP_EXTRACTION", args[1])
+        self.assertIn("Do not save every finding as type: note", args[1])
+        self.assertIn("Allowed type to directory mapping", args[1])
+        self.assertIn("organization -> wiki/organizations/", args[1])
+
+    def test_unified_prompt_contains_type_directory_policy(self):
+        import auto_ingest
+
+        prompt = auto_ingest.build_unified_prompt(
+            "schema",
+            "purpose",
+            "WEB_ARTICLE_DEEP_EXTRACTION\nPerson A founded Company B.",
+            ".web.md",
+        )
+
+        self.assertIn("Type-directory rules", prompt)
+        self.assertIn("organization -> wiki/organizations/", prompt)
+        self.assertIn("Do not use type: note as a fallback", prompt)
 
     def test_extract_web_note_content_returns_page_text(self):
         import app

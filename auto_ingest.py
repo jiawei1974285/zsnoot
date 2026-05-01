@@ -70,9 +70,57 @@ def custom_category_map() -> Dict[str, str]:
             continue
         key = str(item.get('key') or item.get('name') or '').strip().lower()
         label = str(item.get('label') or item.get('name') or key).strip()
+        if key in INTELLIGENCE_TYPE_DIRS:
+            continue
         if key:
             result[key] = label
     return result
+
+
+def type_directory_policy_text() -> str:
+    stable_types = [
+        'case',
+        'person',
+        'location',
+        'organization',
+        'event',
+        'evidence',
+        'case_summary',
+        'crime_pattern',
+        'conclusion',
+        'law',
+        'technique',
+        'note',
+        'summary',
+    ]
+    lines = ["Type-directory rules:"]
+    for page_type in stable_types:
+        lines.append(f"- {page_type} -> wiki/{INTELLIGENCE_TYPE_DIRS[page_type]}/")
+    for page_type, label in custom_category_map().items():
+        lines.append(f"- {page_type} -> wiki/{page_type}/ ({label})")
+    lines.extend([
+        "- The YAML frontmatter `type` must match the page path directory.",
+        "- Do not use type: note as a fallback when the material contains people, organizations, events, evidence, locations, patterns, or conclusions.",
+        "- For web articles, split concrete facts into classified entity/event/evidence/conclusion pages; keep a note page only for the original article summary when useful.",
+    ])
+    return "\n".join(lines)
+
+
+def material_specific_policy(file_type: str) -> str:
+    if (file_type or '').lower() != '.web.md':
+        return ""
+    return """## Web article extraction rules
+
+This material came from a web article or WeChat Official Account page.
+- Treat it as source material, not merely as a diary note.
+- Extract all named people, organizations, places, events, evidence items, conclusions, crime patterns, cases, laws, and techniques supported by the article.
+- Create separate Wiki pages with precise `type` values and correct directories.
+- Do not save every finding as type: note.
+- Preserve the source URL and article title in source/evidence sections when present.
+
+Allowed type to directory mapping:
+{type_policy}
+""".format(type_policy=type_directory_policy_text())
 
 
 def enabled_skills_text() -> str:
@@ -96,6 +144,8 @@ def model_role_hint(file_type: str) -> str:
         return '当前材料为图片，优先考虑 OCR 模型提取文字；如需理解画面、票据、截图结构，可使用视觉模型。'
     if ext == '.pdf':
         return '当前材料为 PDF。如正文解析为空或疑似扫描件，优先考虑 OCR 模型；普通文本 PDF 使用文本模型。'
+    if ext == '.web.md':
+        return '当前材料为网页/微信公众号文章正文，优先使用文本模型；重点抽取文章中的实体、关系、事件、证据和结论，并按类型生成知识页。'
     return '当前材料已解析为文本，优先使用文本模型；只有遇到图片语义或 OCR 需求时再切换模型。'
 
 
@@ -264,6 +314,8 @@ def build_generation_prompt(schema_content: str, analysis: Dict, file_content: s
     custom_types = custom_category_map()
     custom_type_text = "、".join(custom_types.keys()) if custom_types else "无"
     custom_dir_text = "\n".join([f"- {key}: wiki/{key}/ ({label})" for key, label in custom_types.items()]) or "无"
+    type_policy = type_directory_policy_text()
+    web_policy = material_specific_policy('.web.md') if 'WEB_ARTICLE_DEEP_EXTRACTION' in (file_content or '') else ''
     return f"""你是一个警务知识库生成助手。根据分析结果，生成结构化的 Wiki 页面。
 
 ## 项目规范
@@ -294,6 +346,10 @@ def build_generation_prompt(schema_content: str, analysis: Dict, file_content: s
 自定义类型也可以使用：{custom_type_text}
 自定义类型对应目录：
 {custom_dir_text}
+
+{type_policy}
+
+{web_policy}
 
 {CONFLICT_POLICY}
 
@@ -358,6 +414,8 @@ def build_unified_prompt(schema_content: str, purpose_content: str, file_content
     custom_dir_text = "\n".join([f"- {key}: wiki/{key}/ ({label})" for key, label in custom_types.items()]) or "无"
     skill_text = enabled_skills_text()
     role_hint = model_role_hint(file_type)
+    type_policy = type_directory_policy_text()
+    specific_policy = material_specific_policy(file_type)
 
     return f"""你是一个警务知识库构建助手。任务：分析下方材料，直接生成结构化 Wiki 页面。
 
@@ -397,6 +455,10 @@ def build_unified_prompt(schema_content: str, purpose_content: str, file_content
 自定义类型也可使用：{custom_type_text}
 自定义类型对应目录：
 {custom_dir_text}
+
+{type_policy}
+
+{specific_policy}
 
 ## 输出格式
 
