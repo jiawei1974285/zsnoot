@@ -201,6 +201,121 @@ class GovernanceTests(unittest.TestCase):
         self.assertEqual(payload["relations"][0]["relation"], "夫妻")
         self.assertTrue((wiki_dir / "notes" / f"{payload['slug']}.md").exists())
 
+    def test_notes_api_deep_extracts_url_article_with_llm(self):
+        import app
+
+        self._tmp = make_tmp_dir("notes-url-deep-extract")
+        wiki_dir = self._tmp / "wiki"
+        for subdir in app.DEFAULT_WIKI_SUBDIRS:
+            (wiki_dir / subdir).mkdir(parents=True, exist_ok=True)
+        (wiki_dir / "log.md").write_text("# log\n", encoding="utf-8")
+
+        llm_result = {
+            "status": "success",
+            "analysis": {
+                "entities": [{"name": "Person A", "type": "person"}],
+                "relations": [{"source": "Person A", "target": "Company B", "relation": "works_at"}],
+            },
+            "generated_files": ["wiki/persons/person-a.md", "wiki/organizations/company-b.md"],
+            "message": "ok",
+        }
+
+        with mock.patch.object(app, "PROJECT_DIR", str(self._tmp)), \
+             mock.patch.object(app, "WIKI_DIR", str(wiki_dir)), \
+             mock.patch("auth.current_username", return_value="tester"), \
+             mock.patch("auto_ingest.auto_ingest", return_value=llm_result) as auto_ingest:
+            response = app.app.test_client().post(
+                "/api/notes",
+                json={
+                    "title": "Article Note",
+                    "content": "Person A joined Company B after a financing event.",
+                    "tags": ["web"],
+                    "source_url": "https://mp.weixin.qq.com/s/example",
+                    "deep_extract": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["deep_extract"]["status"], "success")
+        self.assertEqual(payload["entities"], [{"name": "Person A", "type": "person"}])
+        self.assertIn("wiki/persons/person-a.md", payload["generated_files"])
+        self.assertTrue((wiki_dir / "notes" / f"{payload['slug']}.md").exists())
+        archived = self._tmp / payload["deep_extract"]["source_path"]
+        self.assertTrue(archived.exists())
+        self.assertIn("https://mp.weixin.qq.com/s/example", archived.read_text(encoding="utf-8"))
+        auto_ingest.assert_called_once()
+        args = auto_ingest.call_args.args
+        self.assertEqual(args[2], ".md")
+        self.assertIn("Person A joined Company B", args[1])
+
+    def test_extract_web_note_content_returns_page_text(self):
+        import app
+
+        class FakeResponse:
+            headers = {"content-type": "text/html; charset=utf-8"}
+            text = """
+            <html>
+              <head><title>Sample News</title><style>.x{}</style></head>
+              <body>
+                <script>ignore()</script>
+                <article><h1>Sample News</h1><p>First paragraph.</p><p>Second paragraph.</p></article>
+              </body>
+            </html>
+            """
+
+            def raise_for_status(self):
+                return None
+
+        with mock.patch("auth.current_username", return_value="tester"), \
+             mock.patch("requests.get", return_value=FakeResponse()) as get:
+            response = app.app.test_client().post("/api/web/extract", json={"url": "https://example.com/news"})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["title"], "Sample News")
+        self.assertIn("First paragraph.", payload["content"])
+        self.assertIn("Second paragraph.", payload["content"])
+        self.assertNotIn("ignore", payload["content"])
+        get.assert_called_once()
+
+    def test_extract_web_note_content_rejects_non_http_url(self):
+        import app
+
+        with mock.patch("auth.current_username", return_value="tester"):
+            response = app.app.test_client().post("/api/web/extract", json={"url": "file:///etc/passwd"})
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_extract_web_note_content_prefers_wechat_article_body(self):
+        import app
+
+        html = """
+        <html>
+          <head><title>Browser Title</title><meta property="og:title" content="OG Title" /></head>
+          <body>
+            <h1 id="activity-name">微信公众号文章标题</h1>
+            <span id="js_name">测试公众号</span>
+            <div class="rich_media_meta_text">2026-05-01</div>
+            <div class="nav">导航 不应该进入正文</div>
+            <div id="js_content" class="rich_media_content">
+              <p>第一段微信公众号正文。</p>
+              <p>第二段，包含重要信息。</p>
+            </div>
+            <div class="footer">底部广告 不应该进入正文</div>
+          </body>
+        </html>
+        """
+
+        result = app.extract_web_page_text(html)
+
+        self.assertEqual(result["title"], "微信公众号文章标题")
+        self.assertIn("测试公众号", result["content"])
+        self.assertIn("第一段微信公众号正文。", result["content"])
+        self.assertIn("第二段，包含重要信息。", result["content"])
+        self.assertNotIn("导航", result["content"])
+        self.assertNotIn("底部广告", result["content"])
+
     def test_chat_sources_include_page_links(self):
         import app
 

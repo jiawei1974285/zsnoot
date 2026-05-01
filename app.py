@@ -5,6 +5,7 @@
 """
 from flask import Flask, render_template, request, jsonify, send_from_directory, session
 from typing import List, Dict
+from html.parser import HTMLParser
 import os
 import secrets
 import uuid
@@ -14,6 +15,7 @@ import re
 import json
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 # 启动即初始化 logging（必须在任何业务模块 import 之前）
 from mjq_logging import setup_logging, get_logger
@@ -60,6 +62,139 @@ def get_raw_sources_dir():
 
 # 保留 RAW_DIR 常量用于不依赖配置的简单场景(向后兼容)
 RAW_DIR = os.path.join(PROJECT_DIR, 'raw', 'sources')
+
+
+class WebTextExtractor(HTMLParser):
+    """Extract readable text and title from simple HTML."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.skip_depth = 0
+        self.in_title = False
+        self.capture_stack = []
+        self.title_parts = []
+        self.heading_parts = []
+        self.meta_title = ''
+        self.author_parts = []
+        self.date_parts = []
+        self.main_parts = []
+        self.text_parts = []
+
+    def handle_starttag(self, tag, attrs):
+        tag = (tag or '').lower()
+        attrs_dict = {str(key).lower(): str(value or '') for key, value in attrs}
+        marker = _article_marker(tag, attrs_dict)
+        if tag in {'script', 'style', 'noscript', 'svg', 'canvas'}:
+            self.skip_depth += 1
+        elif tag == 'title':
+            self.in_title = True
+        elif tag == 'meta':
+            name = (attrs_dict.get('property') or attrs_dict.get('name') or '').lower()
+            if name in {'og:title', 'twitter:title'} and attrs_dict.get('content'):
+                self.meta_title = attrs_dict['content'].strip()
+        tracked_tags = {'article', 'main', 'section', 'div', 'h1', 'h2', 'h3', 'span', 'p', 'li', 'tr'}
+        if tag in tracked_tags:
+            self.capture_stack.append(marker)
+        if tag in {'p', 'div', 'article', 'section', 'br', 'li', 'h1', 'h2', 'h3', 'tr'}:
+            self.text_parts.append('\n')
+            if self.capture_stack:
+                self._append_to_capture('\n')
+
+    def handle_endtag(self, tag):
+        tag = (tag or '').lower()
+        if tag in {'script', 'style', 'noscript', 'svg', 'canvas'} and self.skip_depth:
+            self.skip_depth -= 1
+        elif tag == 'title':
+            self.in_title = False
+        elif tag in {'p', 'div', 'article', 'section', 'li', 'h1', 'h2', 'h3', 'tr'}:
+            self.text_parts.append('\n')
+            if self.capture_stack:
+                self._append_to_capture('\n')
+        if self.capture_stack and tag in {'article', 'main', 'section', 'div', 'h1', 'h2', 'h3', 'span', 'p', 'li', 'tr'}:
+            self.capture_stack.pop()
+
+    def handle_data(self, data):
+        text = (data or '').strip()
+        if not text:
+            return
+        if self.in_title:
+            self.title_parts.append(text)
+        if not self.skip_depth and not self.in_title:
+            self.text_parts.append(text)
+            self._append_to_capture(text)
+
+    def _append_to_capture(self, text):
+        if not self.capture_stack:
+            return
+        marker = next((item for item in reversed(self.capture_stack) if item), '')
+        if not marker:
+            return
+        if marker == 'title':
+            self.heading_parts.append(text)
+        elif marker == 'author':
+            self.author_parts.append(text)
+        elif marker == 'date':
+            self.date_parts.append(text)
+        elif marker == 'main':
+            self.main_parts.append(text)
+
+
+def _article_marker(tag: str, attrs: Dict) -> str:
+    element_id = (attrs.get('id') or '').lower()
+    class_name = (attrs.get('class') or '').lower()
+    role = (attrs.get('role') or '').lower()
+    joined = f'{element_id} {class_name} {role}'
+    if element_id in {'activity-name', 'js_article_title'} or 'article-title' in class_name:
+        return 'title'
+    if element_id in {'js_name', 'profilebt'} or 'author' in class_name:
+        return 'author'
+    if element_id in {'publish_time', 'js_publish_time'} or 'rich_media_meta_text' in class_name or 'time' in class_name:
+        return 'date'
+    if tag in {'article', 'main'} or any(token in joined for token in (
+        'js_content',
+        'rich_media_content',
+        'article-content',
+        'article_content',
+        'post-content',
+        'post_content',
+        'entry-content',
+        'entry_content',
+        'content-body',
+        'content_body',
+        'main-content',
+        'main_content',
+    )):
+        return 'main'
+    return ''
+
+
+def _clean_extracted_text(text: str) -> str:
+    lines = []
+    for line in re.split(r'[\r\n]+', text or ''):
+        cleaned = re.sub(r'\s+', ' ', line).strip()
+        if cleaned:
+            lines.append(cleaned)
+    return '\n'.join(lines)
+
+
+def extract_web_page_text(html: str) -> Dict:
+    parser = WebTextExtractor()
+    parser.feed(html or '')
+    title = (
+        _clean_extracted_text(' '.join(parser.heading_parts))
+        or _clean_extracted_text(parser.meta_title)
+        or _clean_extracted_text(' '.join(parser.title_parts))
+    )
+    main_content = _clean_extracted_text('\n'.join(parser.main_parts))
+    if main_content:
+        byline = _clean_extracted_text('\n'.join([
+            ' '.join(parser.author_parts),
+            ' '.join(parser.date_parts),
+        ]))
+        content = '\n'.join(part for part in [byline, main_content] if part)
+    else:
+        content = _clean_extracted_text('\n'.join(parser.text_parts))
+    return {'title': title, 'content': content}
 
 # Wiki 子目录
 DEFAULT_WIKI_SUBDIRS = [
@@ -683,15 +818,71 @@ def create_note():
     title = (data.get('title') or '').strip() or '未命名笔记'
     content = (data.get('content') or '').strip()
     tags = data.get('tags') or []
+    source_url = (data.get('source_url') or data.get('sourceUrl') or '').strip()
+    deep_extract = bool(data.get('deep_extract') or data.get('deepExtract') or source_url)
 
     try:
         from note_intake import build_note_pages
 
-        result = build_note_pages(PROJECT_DIR, title, content, tags=tags)
+        result = build_note_pages(
+            PROJECT_DIR,
+            title,
+            content,
+            tags=tags,
+            source_url=source_url,
+            deep_extract=deep_extract,
+        )
         return jsonify(result)
     except Exception as exc:
         logger.exception("create note failed title=%s", title)
         return jsonify({'error': f'创建笔记失败: {exc}'}), 500
+
+
+@app.route('/api/web/extract', methods=['POST'])
+def api_extract_web_content():
+    """Fetch a web page and return readable text for note intake."""
+    data = request.json or {}
+    url = (data.get('url') or '').strip()
+    parsed = urlparse(url)
+    if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+        return jsonify({'error': '请输入有效的 http/https URL'}), 400
+
+    try:
+        import requests
+
+        response = requests.get(
+            url,
+            timeout=12,
+            headers={
+                'User-Agent': (
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                    'AppleWebKit/537.36 (KHTML, like Gecko) '
+                    'Chrome/124.0 Safari/537.36'
+                ),
+                'Accept': 'text/html,application/xhtml+xml,text/plain;q=0.8,*/*;q=0.5',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.7',
+            },
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        logger.warning("web extract fetch failed url=%s error=%s", url, exc)
+        return jsonify({'error': f'网页提取失败: {exc}'}), 502
+
+    content_type = (response.headers.get('content-type') or '').lower()
+    if content_type and not any(kind in content_type for kind in ('text/html', 'application/xhtml', 'text/plain')):
+        return jsonify({'error': f'暂不支持该内容类型: {content_type}'}), 415
+
+    html = (response.text or '')[:2_000_000]
+    extracted = extract_web_page_text(html)
+    content = extracted.get('content') or ''
+    if not content:
+        return jsonify({'error': '未能从该网页提取到正文文本'}), 422
+
+    return jsonify({
+        'url': url,
+        'title': extracted.get('title') or '',
+        'content': content,
+    })
 
 
 # ==================== Wiki API ====================

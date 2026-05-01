@@ -81,7 +81,62 @@ def _build_person_body(name: str, title: str, note_slug: str, relations: List[Di
     return "\n".join(lines) + "\n"
 
 
-def build_note_pages(project_dir: str, title: str, content: str, tags: Optional[List[str]] = None) -> Dict:
+def _relpath(path: str, project_dir: str) -> str:
+    return os.path.relpath(path, project_dir).replace("\\", "/")
+
+
+def _dedupe_paths(paths: List[str]) -> List[str]:
+    return list(dict.fromkeys(paths))
+
+
+def _archive_article_source(project_dir: str, note_slug: str, title: str, content: str, source_url: str) -> Dict:
+    raw_dir = os.path.join(project_dir, "raw", "web")
+    os.makedirs(raw_dir, exist_ok=True)
+    raw_path = os.path.join(raw_dir, f"{note_slug}.md")
+    parts = [f"# {title}", ""]
+    if source_url:
+        parts.extend([f"Source URL: {source_url}", ""])
+    parts.append(content.strip())
+    raw_text = "\n".join(parts).strip() + "\n"
+    with open(raw_path, "w", encoding="utf-8") as f:
+        f.write(raw_text)
+    return {"path": raw_path, "content": raw_text}
+
+
+def deep_extract_article(project_dir: str, note_slug: str, title: str, content: str, source_url: str = "") -> Dict:
+    archived = _archive_article_source(project_dir, note_slug, title, content, source_url)
+    import auto_ingest as auto_ingest_module
+
+    previous_project_dir = getattr(auto_ingest_module, "PROJECT_DIR", None)
+    previous_wiki_dir = getattr(auto_ingest_module, "WIKI_DIR", None)
+    auto_ingest_module.PROJECT_DIR = project_dir
+    auto_ingest_module.WIKI_DIR = os.path.join(project_dir, "wiki")
+    try:
+        result = auto_ingest_module.auto_ingest(archived["path"], archived["content"], ".md")
+    finally:
+        if previous_project_dir is not None:
+            auto_ingest_module.PROJECT_DIR = previous_project_dir
+        if previous_wiki_dir is not None:
+            auto_ingest_module.WIKI_DIR = previous_wiki_dir
+    analysis = result.get("analysis") or {}
+    return {
+        "status": result.get("status", "error"),
+        "message": result.get("message", ""),
+        "source_path": _relpath(archived["path"], project_dir),
+        "generated_files": result.get("generated_files") or [],
+        "entities": analysis.get("entities") or [],
+        "relations": analysis.get("relations") or [],
+    }
+
+
+def build_note_pages(
+    project_dir: str,
+    title: str,
+    content: str,
+    tags: Optional[List[str]] = None,
+    source_url: str = "",
+    deep_extract: bool = False,
+) -> Dict:
     from activity_log import record
     from app import save_wiki_page, slugify
     from wiki_links import ensure_bidirectional_links
@@ -105,6 +160,8 @@ def build_note_pages(project_dir: str, title: str, content: str, tags: Optional[
     )
 
     note_body = f"# {title}\n\n{linked_content.strip()}\n"
+    if source_url:
+        note_body += f"\n## 来源链接\n\n- {source_url}\n"
     if relations:
         note_body += "\n## 抽取关系\n\n"
         for item in relations:
@@ -124,10 +181,13 @@ def build_note_pages(project_dir: str, title: str, content: str, tags: Optional[
         "updated": today,
         "source": "manual_note",
     }
+    if source_url:
+        note_meta["source_url"] = source_url
+        note_meta["source"] = "web_note"
 
     generated = []
     note_path = save_wiki_page(note_slug, "notes", note_meta, note_body)
-    generated.append(os.path.relpath(note_path, project_dir).replace("\\", "/"))
+    generated.append(_relpath(note_path, project_dir))
 
     people = sorted({name for relation in relations for name in (relation["source"], relation["target"])})
     for name in people:
@@ -154,8 +214,21 @@ def build_note_pages(project_dir: str, title: str, content: str, tags: Optional[
         }
         person_body = _build_person_body(name, title, note_slug, person_relations)
         person_path = save_wiki_page(slug, "persons", person_meta, person_body)
-        generated.append(os.path.relpath(person_path, project_dir).replace("\\", "/"))
+        generated.append(_relpath(person_path, project_dir))
 
+    deep_result = None
+    entities = []
+    deep_relations = []
+    if deep_extract and content.strip():
+        try:
+            deep_result = deep_extract_article(project_dir, note_slug, title, content, source_url)
+            generated.extend(deep_result.get("generated_files") or [])
+            entities.extend(deep_result.get("entities") or [])
+            deep_relations.extend(deep_result.get("relations") or [])
+        except Exception as exc:
+            deep_result = {"status": "error", "message": str(exc)}
+
+    generated = _dedupe_paths(generated)
     ensure_bidirectional_links(project_dir, generated)
     record(
         project_dir,
@@ -165,6 +238,7 @@ def build_note_pages(project_dir: str, title: str, content: str, tags: Optional[
             "title": title,
             "relation_count": len(relations),
             "generated_files": generated,
+            "deep_extract": deep_result,
         },
     )
 
@@ -173,6 +247,9 @@ def build_note_pages(project_dir: str, title: str, content: str, tags: Optional[
         "title": title,
         "content": content,
         "relations": relations,
+        "entities": entities,
+        "deep_relations": deep_relations,
+        "deep_extract": deep_result,
         "generated_files": generated,
         "created": today,
     }

@@ -1252,6 +1252,13 @@
         <el-form-item label="标题">
           <el-input v-model="noteForm.title" maxlength="80" placeholder="例如：走访记录 / 线索摘录 / 关系备注" />
         </el-form-item>
+        <el-form-item label="URL">
+          <el-input v-model="noteForm.url" placeholder="粘贴网页链接后点击提取">
+            <template #append>
+              <el-button :loading="noteUrlExtracting" :disabled="!noteForm.url.trim()" @click="extractNoteUrl">提取</el-button>
+            </template>
+          </el-input>
+        </el-form-item>
         <el-form-item label="内容">
           <el-input
             v-model="noteForm.content"
@@ -1539,7 +1546,8 @@ const currentBatch = ref(null)
 const batchDrawer = ref(false)
 const noteDialog = ref(false)
 const noteSubmitting = ref(false)
-const noteForm = ref({ title: '', content: '', tagsText: '' })
+const noteUrlExtracting = ref(false)
+const noteForm = ref({ title: '', url: '', content: '', tagsText: '' })
 const selectedBatch = ref(null)
 const expandedBatchId = ref(null)
 const selectedBatchIds = ref([])
@@ -2970,10 +2978,36 @@ async function createNewNote() {
   const pad = (n) => String(n).padStart(2, '0')
   noteForm.value = {
     title: `新建笔记 ${ts.getFullYear()}-${pad(ts.getMonth() + 1)}-${pad(ts.getDate())} ${pad(ts.getHours())}:${pad(ts.getMinutes())}`,
+    url: '',
     content: '',
     tagsText: '',
   }
   noteDialog.value = true
+}
+
+async function extractNoteUrl() {
+  const url = noteForm.value.url.trim()
+  if (!url || noteUrlExtracting.value) return
+  noteUrlExtracting.value = true
+  try {
+    const result = await api('/api/web/extract', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    })
+    if (result.title && /^新建笔记\s/.test(noteForm.value.title)) {
+      noteForm.value.title = result.title
+    }
+    const extracted = result.content || ''
+    noteForm.value.content = noteForm.value.content.trim()
+      ? `${noteForm.value.content.trim()}\n\n${extracted}`
+      : extracted
+    ElMessage.success('网页内容已提取')
+  } catch (error) {
+    ElMessage.error(error.message)
+  } finally {
+    noteUrlExtracting.value = false
+  }
 }
 
 async function submitCreateNote() {
@@ -2990,6 +3024,8 @@ async function submitCreateNote() {
         title: noteForm.value.title,
         content: noteForm.value.content,
         tags,
+        source_url: noteForm.value.url.trim(),
+        deep_extract: Boolean(noteForm.value.url.trim()),
       }),
     })
     noteDialog.value = false
@@ -3001,7 +3037,12 @@ async function submitCreateNote() {
     if (graph.value.nodes.length || activeView.value === 'graph') {
       await loadGraph()
     }
-    ElMessage.success(`笔记已创建，抽取 ${result.relations?.length || 0} 条关系`)
+    const deepCount = result.deep_extract?.generated_files?.length || 0
+    ElMessage.success(
+      deepCount
+        ? `笔记已创建，深度抽取 ${deepCount} 个知识页`
+        : `笔记已创建，抽取 ${result.relations?.length || 0} 条关系`,
+    )
   } catch (error) {
     ElMessage.error(error.message)
   } finally {
