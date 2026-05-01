@@ -240,7 +240,11 @@ class GovernanceTests(unittest.TestCase):
         self.assertEqual(payload["deep_extract"]["status"], "success")
         self.assertEqual(payload["entities"], [{"name": "Person A", "type": "person"}])
         self.assertIn("wiki/persons/person-a.md", payload["generated_files"])
-        self.assertTrue((wiki_dir / "notes" / f"{payload['slug']}.md").exists())
+        note_path = wiki_dir / "notes" / f"{payload['slug']}.md"
+        self.assertTrue(note_path.exists())
+        note_text = note_path.read_text(encoding="utf-8")
+        self.assertIn("[[person-a]]", note_text)
+        self.assertIn("## 深度抽取实体", note_text)
         archived = self._tmp / payload["deep_extract"]["source_path"]
         self.assertTrue(archived.exists())
         self.assertIn("https://mp.weixin.qq.com/s/example", archived.read_text(encoding="utf-8"))

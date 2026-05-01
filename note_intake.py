@@ -112,6 +112,29 @@ def _dedupe_paths(paths: List[str]) -> List[str]:
     return list(dict.fromkeys(paths))
 
 
+def _generated_page_slugs(paths: List[str], note_slug: str) -> List[str]:
+    slugs = []
+    for path in paths:
+        normalized = (path or "").replace("\\", "/")
+        if not normalized.startswith("wiki/") or not normalized.endswith(".md"):
+            continue
+        slug = os.path.splitext(os.path.basename(normalized))[0]
+        if not slug or slug == note_slug:
+            continue
+        slugs.append(slug)
+    return list(dict.fromkeys(slugs))
+
+
+def _append_deep_links(note_body: str, generated_slugs: List[str]) -> str:
+    if not generated_slugs:
+        return note_body
+    marker = "## 深度抽取实体"
+    lines = ["", marker, ""]
+    lines.extend(f"- [[{slug}]]" for slug in generated_slugs)
+    base = note_body.split(marker, 1)[0].rstrip()
+    return base + "\n" + "\n".join(lines) + "\n"
+
+
 def _archive_article_source(project_dir: str, note_slug: str, title: str, content: str, source_url: str) -> Dict:
     raw_dir = os.path.join(project_dir, "raw", "web")
     os.makedirs(raw_dir, exist_ok=True)
@@ -252,6 +275,11 @@ def build_note_pages(
             deep_result = {"status": "error", "message": str(exc)}
 
     generated = _dedupe_paths(generated)
+    deep_slugs = _generated_page_slugs(generated, note_slug)
+    if deep_slugs:
+        note_meta["related"] = sorted(set(note_meta.get("related") or []) | {f"[[{slug}]]" for slug in deep_slugs})
+        note_body = _append_deep_links(note_body, deep_slugs)
+        save_wiki_page(note_slug, "notes", note_meta, note_body)
     ensure_bidirectional_links(project_dir, generated)
     record(
         project_dir,
