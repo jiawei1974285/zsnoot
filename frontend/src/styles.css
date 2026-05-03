@@ -1230,13 +1230,21 @@ textarea {
 }
 
 .wiki-link {
-  background: var(--blue-soft);
-  border: 1px solid #c5dcff;
-  border-radius: 999px;
-  color: var(--blue-strong);
+  background: transparent;
+  border: none;
+  color: #8b5fbf;
   cursor: pointer;
-  margin: 0 2px;
-  padding: 1px 8px;
+  font: inherit;
+  margin: 0;
+  padding: 0;
+  text-decoration: underline;
+  text-decoration-color: rgba(139, 95, 191, 0.5);
+  text-underline-offset: 2px;
+}
+
+.wiki-link:hover {
+  color: #6f47a3;
+  text-decoration-color: #6f47a3;
 }
 
 @keyframes edgeFlow {
