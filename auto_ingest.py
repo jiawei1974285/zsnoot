@@ -268,6 +268,11 @@ def build_analysis_prompt(schema_content: str, purpose_content: str, file_conten
 
 ## 分析任务
 
+实体提取必须穷尽：
+- 列出材料中所有出现的具体人物（含嫌疑人、受害人、证人、报案人、查询人、办案民警、交易对手、家属、关系人等），包括以"、"或"，"列举的成员、"某某"形式部分脱敏的姓名（如"张某"、"李某甲"）。
+- 列出所有组织（公司、银行、平台、团伙等）、地点（小区、门牌号、商铺等）、数字资产/账户/物证。
+- 不要因为"出现次数少"或"信息不全"就跳过。entities 数组应当尽可能完整。
+
 请分析以下文件{type_hint}，输出 JSON 格式的分析结果：
 
 ```json
@@ -449,6 +454,15 @@ def build_unified_prompt(schema_content: str, purpose_content: str, file_content
 - 主页面（按 document_type 分类到合适目录）
 - 实体页面（人物、地点、案件、组织、事件、证据等）
 - 关联页面（法规、技战法等，按需）
+
+## 实体抽取必须做到完整（重要）
+
+不要只挑"显眼"的实体，必须穷尽材料中所有可识别对象，每一个独立人/组织/地点都要单独成页：
+- 人物：包括嫌疑人、受害人、证人、报案人、查询人、办案民警、交易对手、家属、关系人等所有出现过的具体人名；包括以"、"或"，"等列举的成员（例："交易对手共 6 人：甲、乙、丙、丁、戊、己" → 6 个独立 person 页面，每个一个 FILE block）；包括用"某某"形式部分脱敏的姓名（如"张某"、"李某甲"）。
+- 组织：所有公司、单位、派出所、银行、电商平台、群组、团伙等。
+- 地点：具体小区、门牌号、商铺、银行网点、案发地点等。
+- 数字资产/物证/账户：每张银行卡号、虚拟货币钱包、被盗物品等单独建页。
+- 不要因为"出现次数少"或"信息不全"就跳过；信息不全的实体页可以只填 title + 来源引用，留待后续补充。
 
 页面 type 必须使用稳定类型：case、person、location、organization、event、evidence、case_summary、crime_pattern、conclusion、law、technique、note、summary。
 新增类型对应目录：wiki/organizations、wiki/events、wiki/evidence、wiki/case_summaries、wiki/crime_patterns、wiki/conclusions。

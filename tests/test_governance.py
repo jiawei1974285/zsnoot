@@ -295,6 +295,28 @@ class GovernanceTests(unittest.TestCase):
         self.assertIn("organization -> wiki/organizations/", prompt)
         self.assertIn("Do not use type: note as a fallback", prompt)
 
+    def test_unified_prompt_demands_exhaustive_person_extraction(self):
+        """Regression: 实体抽取必须穷尽，避免顿号列表中的人名被静默丢弃。"""
+        import auto_ingest
+
+        prompt = auto_ingest.build_unified_prompt("schema", "purpose", "材料正文", "")
+
+        self.assertIn("实体抽取必须做到完整", prompt)
+        self.assertIn("交易对手", prompt)
+        # 关键短语：至少提到顿号列表与"某某"形式脱敏，二者都是常见的漏抽场景
+        self.assertIn("、", prompt)
+        self.assertIn("某某", prompt)
+
+    def test_analysis_prompt_demands_exhaustive_person_extraction(self):
+        """Regression: two-call 模式下分析阶段也要求穷尽实体。"""
+        import auto_ingest
+
+        prompt = auto_ingest.build_analysis_prompt("schema", "purpose", "材料正文", "")
+
+        self.assertIn("实体提取必须穷尽", prompt)
+        self.assertIn("交易对手", prompt)
+        self.assertIn("某某", prompt)
+
     def test_extract_web_note_content_returns_page_text(self):
         import app
 
