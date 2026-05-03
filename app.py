@@ -748,16 +748,30 @@ def api_stats():
 
     # 最近问答（来自 wiki/outputs/，按 created 倒序前 5 条）
     recent_qa: List[Dict] = []
+    recent_notes: List[Dict] = []
     for page in pages:
-        if page.get('type') == 'outputs':
+        ptype = page.get('type')
+        if ptype == 'outputs':
             recent_qa.append({
                 'slug': page['slug'],
                 'title': page.get('title', page['slug']),
                 'created': str(page.get('created') or ''),
                 'snippet': (page.get('body_preview') or '')[:120],
             })
+        elif ptype == 'notes':
+            recent_notes.append({
+                'slug': page['slug'],
+                'type': ptype,
+                'title': page.get('title', page['slug']),
+                'created': str(page.get('created') or ''),
+                'updated': str(page.get('updated') or ''),
+                'snippet': (page.get('body_preview') or '')[:120],
+            })
     recent_qa.sort(key=lambda x: x['created'], reverse=True)
     recent_qa = recent_qa[:5]
+    # 排序按 updated 优先（覆盖二次解析），缺失则回退 created
+    recent_notes.sort(key=lambda x: (x['updated'] or x['created']), reverse=True)
+    recent_notes = recent_notes[:5]
 
     daily_activity = count_by_day(PROJECT_DIR, days=14, actions=actions_to_track)
 
@@ -771,6 +785,7 @@ def api_stats():
         'period_summary': period_summary,
         'daily_activity': daily_activity,
         'recent_qa': recent_qa,
+        'recent_notes': recent_notes,
     })
 
 
@@ -1773,11 +1788,15 @@ def api_lint_fix():
                 failed.append({'item': item, 'error': str(exc)})
 
     elif category == 'orphan_pages':
+        # 把 enrich 与 ignore 分开：enrich 走并发（LLM I/O 密集），ignore 顺序处理。
+        # 顺序执行 N 个 enrich 是历史耗时根因（每个 ~5-30s LLM 调用串行）。
         all_pages = get_wiki_pages() if any(i.get('action') == 'enrich' for i in items) else []
         try:
             from auto_ingest import enrich_wikilinks
         except Exception:  # noqa: BLE001
             enrich_wikilinks = None
+
+        enrich_jobs = []  # (item, page) 待并发 enrich
         for item in items:
             slug = item.get('slug')
             page_type = item.get('type')
@@ -1791,14 +1810,7 @@ def api_lint_fix():
                     if not enrich_wikilinks:
                         failed.append({'item': item, 'error': 'enrich_wikilinks 不可用'})
                         continue
-                    enriched = enrich_wikilinks(page['content'], all_pages)
-                    new_meta, new_body = parse_frontmatter(enriched)
-                    if not new_meta:
-                        new_meta = dict(page['meta'])
-                        new_body = enriched
-                    new_meta['updated'] = today
-                    save_wiki_page(slug, page['type'], new_meta, new_body)
-                    succeeded.append({'item': item, 'enriched': True})
+                    enrich_jobs.append((item, page))
                 elif action == 'ignore':
                     meta = dict(page['meta'])
                     meta['standalone'] = True
@@ -1809,6 +1821,34 @@ def api_lint_fix():
                     failed.append({'item': item, 'error': f'orphan_pages 不支持动作: {action}'})
             except Exception as exc:  # noqa: BLE001
                 failed.append({'item': item, 'error': str(exc)})
+
+        # 并发执行 enrich：LLM 调用是 I/O 密集，并行可大幅缩短总耗时。
+        if enrich_jobs:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            max_workers = min(5, len(enrich_jobs))
+
+            def _do_enrich(job):
+                jitem, jpage = job
+                return jitem, jpage, enrich_wikilinks(jpage['content'], all_pages)
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(_do_enrich, job) for job in enrich_jobs]
+                for future in as_completed(futures):
+                    try:
+                        item, page, enriched = future.result()
+                    except Exception as exc:  # noqa: BLE001
+                        failed.append({'item': None, 'error': f'enrich 异常: {exc}'})
+                        continue
+                    try:
+                        new_meta, new_body = parse_frontmatter(enriched)
+                        if not new_meta:
+                            new_meta = dict(page['meta'])
+                            new_body = enriched
+                        new_meta['updated'] = today
+                        save_wiki_page(item.get('slug'), page['type'], new_meta, new_body)
+                        succeeded.append({'item': item, 'enriched': True})
+                    except Exception as exc:  # noqa: BLE001
+                        failed.append({'item': item, 'error': str(exc)})
 
     else:  # stale_pages
         for item in items:

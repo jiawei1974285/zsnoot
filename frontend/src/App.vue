@@ -337,6 +337,23 @@
               </section>
 
               <section class="home-panel">
+                <div class="section-title section-title-sm">最近笔记</div>
+                <div class="qa-list">
+                  <button
+                    v-for="note in homeStats.recent_notes || []"
+                    :key="note.slug"
+                    class="qa-row"
+                    @click="openNoteFromHome(note)"
+                  >
+                    <div class="qa-title">{{ note.title }}</div>
+                    <div class="qa-snippet">{{ note.snippet || '（无摘要）' }}</div>
+                    <div class="qa-date">{{ note.updated || note.created }}</div>
+                  </button>
+                  <div v-if="!homeStats.recent_notes?.length" class="detail-item">还没有新建笔记</div>
+                </div>
+              </section>
+
+              <section class="home-panel">
                 <div class="section-title section-title-sm">最近问答</div>
                 <div class="qa-list">
                   <button
@@ -1497,6 +1514,7 @@ const homeStats = ref({
   period_summary: {},
   daily_activity: [],
   recent_qa: [],
+  recent_notes: [],
 })
 const homeActivity = ref([])
 
@@ -2387,6 +2405,18 @@ async function openQAFromHome(qa) {
   // 直接打开预览
   try {
     selectedPage.value = await api(`/api/wiki/pages/${encodeURIComponent(qa.slug)}?type=outputs`)
+    pageDrawer.value = true
+  } catch (error) {
+    ElMessage.error(error.message)
+  }
+}
+
+async function openNoteFromHome(note) {
+  setActiveView('knowledge')
+  pageFilter.value = 'notes'
+  await loadPages()
+  try {
+    selectedPage.value = await api(`/api/wiki/pages/${encodeURIComponent(note.slug)}?type=notes`)
     pageDrawer.value = true
   } catch (error) {
     ElMessage.error(error.message)
