@@ -3443,13 +3443,89 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;')
 }
 
+// 收集当前 wiki 库里所有可作为内联链接目标的实体（名字+slug）。
+// 排除当前正在预览的页面与"输出"类页面，去重，按名字长度倒序，方便最长匹配优先。
+function collectLinkableEntities() {
+  const currentSlug = selectedPage.value?.slug
+  const seen = new Set()
+  const out = []
+  for (const p of pages.value || []) {
+    if (!p || !p.slug) continue
+    if (p.slug === currentSlug) continue
+    if (p.type === 'outputs') continue
+    const name = String(p.title || p.slug).trim()
+    if (!name || name.length < 2) continue
+    if (seen.has(name)) continue
+    seen.add(name)
+    out.push({ name, slug: p.slug })
+  }
+  out.sort((a, b) => b.name.length - a.name.length)
+  return out
+}
+
+// 在已转义的 HTML 片段中自动给已知实体名包上 wiki-link 按钮，
+// 跳过已有的 <button class="wiki-link"> 块与 HTML 实体（&amp; 等），
+// 以避免产生嵌套链接或破坏字符引用。
+function autolinkEntities(htmlSegment, entities) {
+  if (!htmlSegment || !entities.length) return htmlSegment
+  const escMap = new Map()
+  for (const { name, slug } of entities) {
+    const esc = escapeHtml(name)
+    if (!escMap.has(esc)) {
+      escMap.set(esc, { slug: escapeHtml(slug), display: esc })
+    }
+  }
+  const escNames = Array.from(escMap.keys()).sort((a, b) => b.length - a.length)
+  const BUTTON_OPEN = '<button class="wiki-link"'
+  const BUTTON_CLOSE = '</button>'
+  const result = []
+  let i = 0
+  const len = htmlSegment.length
+  while (i < len) {
+    if (htmlSegment.startsWith(BUTTON_OPEN, i)) {
+      const closeIdx = htmlSegment.indexOf(BUTTON_CLOSE, i)
+      if (closeIdx !== -1) {
+        const end = closeIdx + BUTTON_CLOSE.length
+        result.push(htmlSegment.slice(i, end))
+        i = end
+        continue
+      }
+    }
+    if (htmlSegment[i] === '&') {
+      const semi = htmlSegment.indexOf(';', i)
+      if (semi !== -1 && semi - i < 10) {
+        result.push(htmlSegment.slice(i, semi + 1))
+        i = semi + 1
+        continue
+      }
+    }
+    let matched = false
+    for (const escName of escNames) {
+      if (htmlSegment.startsWith(escName, i)) {
+        const { slug, display } = escMap.get(escName)
+        result.push(`<button class="wiki-link" data-slug="${slug}">${display}</button>`)
+        i += escName.length
+        matched = true
+        break
+      }
+    }
+    if (!matched) {
+      result.push(htmlSegment[i])
+      i++
+    }
+  }
+  return result.join('')
+}
+
 function renderMarkdownPreview(markdown) {
+  const linkables = collectLinkableEntities()
   const lines = String(markdown || '').split('\n')
   const html = lines
     .map((line) => {
-      const escaped = escapeHtml(line)
+      let escaped = escapeHtml(line)
         .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '<button class="wiki-link" data-slug="$1">$2</button>')
         .replace(/\[\[([^\]]+)\]\]/g, '<button class="wiki-link" data-slug="$1">$1</button>')
+      escaped = autolinkEntities(escaped, linkables)
       if (escaped.startsWith('### ')) return `<h3>${escaped.slice(4)}</h3>`
       if (escaped.startsWith('## ')) return `<h2>${escaped.slice(3)}</h2>`
       if (escaped.startsWith('# ')) return `<h1>${escaped.slice(2)}</h1>`
