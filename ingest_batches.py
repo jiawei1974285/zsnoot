@@ -29,10 +29,13 @@ class IngestBatchStore:
             return []
 
     def _write(self, batches: List[Dict]) -> None:
-        self.store_file.write_text(
+        # 原子写：先写 .tmp 再 os.replace，防止并发 update 或崩溃导致 JSON 损坏
+        tmp_file = self.store_file.with_suffix(self.store_file.suffix + ".tmp")
+        tmp_file.write_text(
             json.dumps(batches, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        os.replace(tmp_file, self.store_file)
 
     def create_batch(self, file_names: List[str]) -> Dict:
         now = datetime.now().isoformat(timespec="seconds")

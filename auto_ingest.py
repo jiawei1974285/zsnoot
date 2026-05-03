@@ -646,8 +646,11 @@ def _write_blocks_to_disk(file_blocks: List[Dict]) -> List[str]:
         if os.path.exists(full_path):
             with open(full_path, 'r', encoding='utf-8') as f:
                 content = _merge_page_content(f.read(), content)
-        with open(full_path, 'w', encoding='utf-8') as f:
+        # 原子写：tmp 同目录写入后 os.replace，避免并发或崩溃导致半截内容
+        tmp_path = f"{full_path}.tmp"
+        with open(tmp_path, 'w', encoding='utf-8') as f:
             f.write(content)
+        os.replace(tmp_path, full_path)
         generated_files.append(rel_path)
         try:
             from activity_log import record

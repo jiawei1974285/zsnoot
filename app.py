@@ -975,7 +975,11 @@ def api_update_wiki_page(slug):
 
 @app.route('/api/wiki/pages/<slug>', methods=['DELETE'])
 def api_delete_wiki_page(slug):
-    """删除 Wiki 页面"""
+    """删除 Wiki 页面。要求登录，避免未认证调用方直接删除。"""
+    from auth import current_username
+    if not current_username():
+        return jsonify({'error': 'unauthorized'}), 401
+
     page_type = request.args.get('type')
     page = get_wiki_page(slug, page_type)
 
