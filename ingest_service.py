@@ -209,7 +209,65 @@ def _ingest_runtime_config(project_dir: str) -> Dict:
         section = {}
     return {
         "max_workers": max(1, int(section.get("max_workers", 5))),
+        "skip_unchanged": bool(section.get("skip_unchanged", True)),
     }
+
+
+def build_sha256_cache_index(store: IngestBatchStore, project_dir: str) -> Dict[str, Dict]:
+    """扫历史批次构造 {sha256 → 复用记录}。
+
+    复用记录 = {generated_files, entities, batch_id}。
+    只采纳同时满足以下条件的批次：
+      - status 不是 rolled_back / failed
+      - generated_files 中至少一个文件仍存在于磁盘（避免引用已删页）
+      - 该 sha256 对应的源文件没有出现在 batch 的 errors 列表里
+        （即这次入库这个文件是真正成功的，不是 fallback 出来的"待精炼"占位）
+    并发场景：本函数在批次开始前同步调用一次，结果只在该批次内只读使用，无并发写。
+    """
+    root = Path(project_dir)
+    index: Dict[str, Dict] = {}
+    for batch in store.list_batches():
+        if batch.get("status") in {"rolled_back", "failed"}:
+            continue
+        generated = list(batch.get("generated_files") or [])
+        if not generated:
+            continue
+        # 至少一个生成页仍存在
+        alive = [g for g in generated if (root / g).exists()]
+        if not alive:
+            continue
+        # 失败的源文件名不缓存（它们对应的"待精炼"fallback 页不应被复用）
+        failed_names = {e.get("file") for e in (batch.get("errors") or []) if e.get("file")}
+        for original in batch.get("original_files") or []:
+            sha = original.get("sha256")
+            if not sha or sha in index:
+                continue
+            if original.get("name") in failed_names:
+                continue
+            index[sha] = {
+                "generated_files": alive,
+                "entities": list(batch.get("entities") or []),
+                "batch_id": batch.get("id"),
+            }
+    return index
+
+
+def _is_referenced_by_other_batches(
+    store: IngestBatchStore, current_batch_id: str, file_rel: str
+) -> bool:
+    """检查除 current_batch_id 之外是否还有非 rolled_back 批次引用此 wiki 文件。
+
+    sha256 缓存命中后，多个批次可能共享同一组 generated_files；
+    rollback 时若直接 unlink，会破坏其他批次的产出。
+    """
+    for batch in store.list_batches():
+        if batch.get("id") == current_batch_id:
+            continue
+        if batch.get("status") in {"rolled_back", "failed"}:
+            continue
+        if file_rel in (batch.get("generated_files") or []):
+            return True
+    return False
 
 
 def _process_one_file(
@@ -218,11 +276,14 @@ def _process_one_file(
     *,
     mode: str = "batch",
     reparse_context: str = "",
+    cache_index: Optional[Dict[str, Dict]] = None,
 ) -> Dict:
     """处理单个归档文件 → wiki 页面。返回标准化的结果字典。
 
     所有异常都在这里捕获并降级成 fallback 页面（保持原则 14 容错路径完整）。
-    返回字段：file_name, generated_files[], entities[], error?, log_message, elapsed_ms
+    若 cache_index 提供且 sha256 命中，直接复用既有 wiki 页，跳过 LLM 调用。
+    返回字段：file_name, generated_files[], entities[], error?, log_message, elapsed_ms,
+             cached_from?
     """
     from auto_ingest import auto_ingest
     from file_parser import FileParseError, get_file_info, parse_file
@@ -230,6 +291,25 @@ def _process_one_file(
     abs_path = Path(project_dir) / original["path"]
     file_name = original["name"]
     t0 = time.time()
+
+    # SHA256 增量缓存：同内容文件已成功入库 → 直接复用
+    if cache_index:
+        sha = original.get("sha256")
+        cached = cache_index.get(sha) if sha else None
+        if cached:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            logger.info("file cache hit name=%s from=%s pages=%d",
+                        file_name, cached.get("batch_id"), len(cached["generated_files"]))
+            return {
+                "file_name": file_name,
+                "generated_files": list(cached["generated_files"]),
+                "entities": list(cached["entities"]),
+                "error": None,
+                "log_message": f"{file_name} 内容未变化，复用 {cached.get('batch_id')} 的知识页（跳过 LLM）",
+                "elapsed_ms": elapsed_ms,
+                "cached_from": cached.get("batch_id"),
+            }
+
     try:
         file_content = parse_file(str(abs_path))
         file_info = get_file_info(str(abs_path))
@@ -327,6 +407,15 @@ def _run_pipeline_on_archived(
     total = len(archived)
     t_batch = time.time()
 
+    # 仅普通 batch 启用缓存；reparse / retry 都明确希望重跑 LLM，所以跳过缓存
+    cache_index: Optional[Dict[str, Dict]] = None
+    if label == "batch" and runtime.get("skip_unchanged", True):
+        try:
+            cache_index = build_sha256_cache_index(store, project_dir)
+        except Exception as exc:
+            logger.warning("build_sha256_cache_index 失败，跳过增量缓存: %s", exc)
+            cache_index = None
+
     existing_batch = store.get_batch(batch_id) if merge_existing else None
     generated_files: List[str] = list(existing_batch.get("generated_files") or []) if existing_batch else []
     entities: List[Dict] = list(existing_batch.get("entities") or []) if existing_batch else []
@@ -366,7 +455,9 @@ def _run_pipeline_on_archived(
     if total == 1:
         set_status(project_dir, "processing", f"正在处理 {archived[0]['name']}",
                    {"batch_id": batch_id, "done": 0, "total": 1})
-        _on_done(_process_one_file(project_dir, archived[0], mode=label, reparse_context=_reparse_context(existing_batch)))
+        _on_done(_process_one_file(project_dir, archived[0], mode=label,
+                                   reparse_context=_reparse_context(existing_batch),
+                                   cache_index=cache_index))
     else:
         set_status(project_dir, "processing",
                    f"并发处理中 (0/{total}, 并发数 {max_workers})",
@@ -375,7 +466,8 @@ def _run_pipeline_on_archived(
         with ThreadPoolExecutor(max_workers=max_workers,
                                 thread_name_prefix=label) as pool:
             context = _reparse_context(existing_batch)
-            futures = [pool.submit(_process_one_file, project_dir, original, mode=label, reparse_context=context)
+            futures = [pool.submit(_process_one_file, project_dir, original, mode=label,
+                                   reparse_context=context, cache_index=cache_index)
                        for original in archived]
             for fut in as_completed(futures):
                 try:
@@ -702,7 +794,13 @@ def rollback_batch(
 
     root = Path(project_dir).resolve()
     removed = []
+    skipped_shared = []
     for rel in batch.get("generated_files", []):
+        # sha256 缓存命中时多个批次会共享同一组 wiki 页；
+        # 仅在没有其他活跃批次引用时才真正删除文件
+        if _is_referenced_by_other_batches(store, batch_id, rel):
+            skipped_shared.append(rel)
+            continue
         path = (root / rel).resolve()
         if root in path.parents and path.exists() and path.is_file():
             path.unlink()
@@ -713,7 +811,13 @@ def rollback_batch(
         status="rolled_back",
         removed_files=removed,
     )
-    store.append_log(batch_id, f"已回滚 {len(removed)} 个知识页面，原始材料保留")
+    if skipped_shared:
+        store.append_log(
+            batch_id,
+            f"已回滚 {len(removed)} 个知识页面，{len(skipped_shared)} 个被其他批次共享未删除，原始材料保留",
+        )
+    else:
+        store.append_log(batch_id, f"已回滚 {len(removed)} 个知识页面，原始材料保留")
     return detail
 
 

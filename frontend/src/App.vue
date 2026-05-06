@@ -928,6 +928,19 @@
                 <el-form-item v-if="configForm.llm.provider !== 'ollama'" label="API Key 或环境变量">
                   <el-input v-model="configForm.llm.api_key" show-password placeholder="${BAILIAN_API_KEY}" />
                 </el-form-item>
+                <el-form-item label="深度思考 (thinking)">
+                  <el-switch v-model="configForm.llm.thinking" />
+                  <el-select
+                    v-if="configForm.llm.thinking"
+                    v-model="configForm.llm.reasoning_effort"
+                    style="width: 140px; margin-left: 12px"
+                  >
+                    <el-option label="低" value="low" />
+                    <el-option label="中" value="medium" />
+                    <el-option label="高" value="high" />
+                  </el-select>
+                  <div class="form-help">DeepSeek V4 / Reasoner 等推理模型支持；普通模型请保持关闭</div>
+                </el-form-item>
               </section>
 
               <section class="config-card">
@@ -955,6 +968,18 @@
                 <el-form-item v-if="configForm.vision_model.provider !== 'ollama'" label="API Key 或环境变量">
                   <el-input v-model="configForm.vision_model.api_key" show-password placeholder="${VISION_MODEL_API_KEY}" />
                 </el-form-item>
+                <el-form-item label="深度思考 (thinking)">
+                  <el-switch v-model="configForm.vision_model.thinking" />
+                  <el-select
+                    v-if="configForm.vision_model.thinking"
+                    v-model="configForm.vision_model.reasoning_effort"
+                    style="width: 140px; margin-left: 12px"
+                  >
+                    <el-option label="低" value="low" />
+                    <el-option label="中" value="medium" />
+                    <el-option label="高" value="high" />
+                  </el-select>
+                </el-form-item>
               </section>
 
               <section class="config-card">
@@ -981,6 +1006,18 @@
                 </el-form-item>
                 <el-form-item v-if="configForm.ocr_model.provider !== 'ollama'" label="API Key 或环境变量">
                   <el-input v-model="configForm.ocr_model.api_key" show-password placeholder="${OCR_MODEL_API_KEY}" />
+                </el-form-item>
+                <el-form-item label="深度思考 (thinking)">
+                  <el-switch v-model="configForm.ocr_model.thinking" />
+                  <el-select
+                    v-if="configForm.ocr_model.thinking"
+                    v-model="configForm.ocr_model.reasoning_effort"
+                    style="width: 140px; margin-left: 12px"
+                  >
+                    <el-option label="低" value="low" />
+                    <el-option label="中" value="medium" />
+                    <el-option label="高" value="high" />
+                  </el-select>
                 </el-form-item>
               </section>
 
@@ -3545,6 +3582,8 @@ function defaultConfig() {
     api_key: '',
     temperature: 0.1,
     max_tokens: 8000,
+    thinking: false,
+    reasoning_effort: 'high',
   }
   return {
     llm: {

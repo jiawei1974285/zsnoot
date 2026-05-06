@@ -1495,13 +1495,25 @@ def api_chat():
             relevant_pages.append({**page, 'full_content': full_content[:1000], 'score': score})
     
     relevant_pages.sort(key=lambda x: x['score'], reverse=True)
-    relevant_pages = relevant_pages[:5]  # 取前 5 个相关页面
+    relevant_pages = relevant_pages[:5]  # 关键词命中 top 5
 
-    # 构建上下文
-    context_parts = []
-    for page in relevant_pages:
-        context_parts.append(f"## {page['title']}\n{page.get('full_content', page['body_preview'])}")
-    
+    # 图谱二跳扩展：沿 [[wiki-link]] 边把强相关但关键词没命中的页拉进来
+    # 串并案场景刚需：A 案命中关键词、B 案没命中但通过同一嫌疑人/地点连着 → 应一并入上下文
+    chat_cfg = _load_chat_runtime_config()
+    expanded = _expand_via_graph(
+        relevant_pages, all_pages,
+        enable=chat_cfg['graph_expand'],
+        hops=chat_cfg['graph_hops'],
+        max_added=chat_cfg['graph_max_added'],
+    )
+
+    # 字符预算分配：替代原来的硬编码 [:1000] 截断
+    # 关键词命中页拿大头，扩展页拿余量；单页上限由 max_chars_per_page 控制
+    context_parts = _build_chat_context(
+        relevant_pages, expanded,
+        budget_chars=int(chat_cfg['context_budget_chars'] * chat_cfg['wiki_share']),
+        max_chars_per_page=chat_cfg['max_chars_per_page'],
+    )
     context = '\n\n'.join(context_parts) if context_parts else '知识库中没有相关内容。'
     
     # 调用 LLM 生成回答
@@ -1545,14 +1557,18 @@ def api_chat():
     else:
         response = '抱歉，我无法回答这个问题。'
 
+    # 来源 = 关键词命中 + 图谱扩展（扩展页标记 source: graph 给前端区分）
+    all_sources = list(relevant_pages) + [{**p, '_graph_expanded': True} for p in expanded]
+
     # 复利循环：自动将问答结果存回 wiki
-    auto_save_qa(query, response, relevant_pages)
+    auto_save_qa(query, response, all_sources)
 
     try:
         from activity_log import record
         record(PROJECT_DIR, 'chat', None, {
             'query': query[:80],
             'sources': [p['title'] for p in relevant_pages[:3]],
+            'graph_expanded': len(expanded),
         })
     except Exception:
         pass
@@ -1560,9 +1576,139 @@ def api_chat():
     return jsonify({
         'query': query,
         'response': response,
-        'sources': serialize_chat_sources(relevant_pages),
+        'sources': serialize_chat_sources(all_sources),
         'llm_error': llm_error,
     })
+
+
+def _load_chat_runtime_config() -> Dict:
+    """读取 chat 段配置，给安全默认值。配置缺失/异常都退回到合理默认。"""
+    defaults = {
+        'graph_expand': True,
+        'graph_hops': 1,
+        'graph_max_added': 5,
+        'context_budget_chars': 150000,
+        'wiki_share': 0.75,
+        'max_chars_per_page': 10000,
+    }
+    try:
+        from config_store import load_config
+        section = load_config(os.path.join(PROJECT_DIR, 'config', 'config.yaml')).get('chat') or {}
+    except Exception:
+        section = {}
+    out = dict(defaults)
+    for k, v in section.items():
+        if k in defaults and v is not None:
+            try:
+                out[k] = type(defaults[k])(v) if not isinstance(defaults[k], bool) else bool(v)
+            except (TypeError, ValueError):
+                pass
+    # 边界保护
+    out['graph_hops'] = max(0, min(2, int(out['graph_hops'])))
+    out['graph_max_added'] = max(0, min(20, int(out['graph_max_added'])))
+    out['context_budget_chars'] = max(2000, min(500000, int(out['context_budget_chars'])))
+    out['wiki_share'] = max(0.3, min(0.95, float(out['wiki_share'])))
+    out['max_chars_per_page'] = max(300, min(30000, int(out['max_chars_per_page'])))
+    return out
+
+
+def _expand_via_graph(seed_pages: List[Dict], all_pages: List[Dict], *,
+                      enable: bool, hops: int, max_added: int) -> List[Dict]:
+    """从 seed_pages 沿知识图谱 [[wiki-link]] 边走 hops 跳，返回新增的页面对象。
+
+    设计要点：
+      - 任何异常 / 空图谱都安全退回到 []，不影响主流程（原则 14 容错）
+      - 不替换关键词命中结果，只追加；上下文体积由 _build_chat_context 控制
+      - max_added 控制扩展规模，避免低相关页冲淡上下文
+    """
+    if not enable or hops <= 0 or max_added <= 0 or not seed_pages:
+        return []
+
+    try:
+        from graph import build_graph
+        graph_data = build_graph()
+    except Exception as exc:
+        from mjq_logging import get_logger
+        get_logger(__name__).warning('chat graph_expand 失败，退回纯关键词检索: %s', exc)
+        return []
+
+    # 邻接表
+    adj: Dict[str, set] = {}
+    for edge in graph_data.get('edges', []):
+        s, t = edge.get('source'), edge.get('target')
+        if not s or not t:
+            continue
+        adj.setdefault(s, set()).add(t)
+        adj.setdefault(t, set()).add(s)
+
+    seed_slugs = {p.get('slug') for p in seed_pages if p.get('slug')}
+    visited = set(seed_slugs)
+    frontier = set(seed_slugs)
+    expanded_slugs: List[str] = []
+
+    for _ in range(hops):
+        next_frontier: set = set()
+        for slug in frontier:
+            for neighbor in adj.get(slug, ()):
+                if neighbor in visited:
+                    continue
+                visited.add(neighbor)
+                next_frontier.add(neighbor)
+                expanded_slugs.append(neighbor)
+                if len(expanded_slugs) >= max_added:
+                    break
+            if len(expanded_slugs) >= max_added:
+                break
+        if len(expanded_slugs) >= max_added:
+            break
+        frontier = next_frontier
+
+    if not expanded_slugs:
+        return []
+
+    page_by_slug = {p.get('slug'): p for p in all_pages if p.get('slug')}
+    out: List[Dict] = []
+    for slug in expanded_slugs[:max_added]:
+        meta = page_by_slug.get(slug)
+        if not meta:
+            continue
+        full = get_wiki_page(slug, meta.get('type'))
+        body = (full or {}).get('body') or meta.get('body_preview') or ''
+        out.append({**meta, 'full_content': body, 'score': 0, '_graph_expanded': True})
+    return out
+
+
+def _build_chat_context(primary: List[Dict], expanded: List[Dict], *,
+                        budget_chars: int, max_chars_per_page: int = 1000) -> List[str]:
+    """按字符预算给每页分配长度，替代旧的硬编码 [:1000] 截断。
+
+    分配策略：primary 拿 70% 预算，expanded 拿 30%；同组内按页数等分；
+    单页地板 300、天花板 max_chars_per_page（默认 1000，由 chat.max_chars_per_page 控制）。
+    """
+    if not primary and not expanded:
+        return []
+
+    parts: List[str] = []
+    primary_budget = int(budget_chars * 0.7) if expanded else budget_chars
+    expanded_budget = budget_chars - primary_budget
+    ceiling = max(300, int(max_chars_per_page))
+
+    def _emit(pages: List[Dict], total_budget: int, label: str = '') -> None:
+        if not pages or total_budget <= 0:
+            return
+        per_page = max(300, min(ceiling, total_budget // len(pages)))
+        for page in pages:
+            content = page.get('full_content') or page.get('body_preview') or ''
+            if len(content) > per_page:
+                content = content[:per_page].rstrip() + '\n……（内容较长，按上下文预算截取）'
+            heading = f"## {page.get('title') or page.get('slug')}"
+            if label:
+                heading += f"  _{label}_"
+            parts.append(f"{heading}\n{content}")
+
+    _emit(primary, primary_budget)
+    _emit(expanded, expanded_budget, label='图谱关联页')
+    return parts
 
 
 def serialize_chat_sources(pages: List[Dict]) -> List[Dict]:
@@ -1573,7 +1719,10 @@ def serialize_chat_sources(pages: List[Dict]) -> List[Dict]:
         title = page.get('title') or slug
         if not slug or not page_type:
             continue
-        sources.append({'slug': slug, 'type': page_type, 'title': title})
+        item = {'slug': slug, 'type': page_type, 'title': title}
+        if page.get('_graph_expanded'):
+            item['source'] = 'graph'
+        sources.append(item)
     return sources
 
 

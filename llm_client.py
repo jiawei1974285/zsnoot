@@ -109,12 +109,38 @@ def current_llm_config(role: str = 'llm'):
     )
     model = env.get(fields['model']) or yaml_config.get('model') or fallback.get('model') or 'qwen3.5-plus'
     provider = (env.get(fields['provider']) or yaml_config.get('provider') or fallback.get('provider') or '').lower()
+    # 深度思考 thinking：DeepSeek V4 / Reasoner 等模型支持。开启后请求体加：
+    #   reasoning_effort: "high" | "medium" | "low"
+    #   thinking: {"type": "enabled"}
+    # 角色级 thinking 缺省时，不会从 fallback(llm) 继承——视觉/OCR 模型默认与文本模型独立
+    thinking = bool(yaml_config.get('thinking', False))
+    reasoning_effort = str(yaml_config.get('reasoning_effort') or 'high').lower()
+    if reasoning_effort not in {'low', 'medium', 'high'}:
+        reasoning_effort = 'high'
     return {
         'provider': provider,
         'base_url': normalize_base_url(base_url),
         'api_key': resolve_env_value(api_key),
         'model': model,
+        'thinking': thinking,
+        'reasoning_effort': reasoning_effort,
     }
+
+
+def _apply_thinking(payload: Dict, config: Dict) -> Dict:
+    """thinking 开启时，往 payload 注入 DeepSeek 风格的 reasoning 字段。
+
+    样例（用户提供）：
+        reasoning_effort="high"
+        extra_body={"thinking": {"type": "enabled"}}
+    OpenAI SDK 的 extra_body 只是把内层键合并到顶层，所以原生 HTTP 直接放顶层即可。
+    其他厂商（Anthropic / Qwen）的 thinking 形状不同，需要时再单独适配。
+    """
+    if not config.get('thinking'):
+        return payload
+    payload['reasoning_effort'] = config.get('reasoning_effort', 'high')
+    payload['thinking'] = {'type': 'enabled'}
+    return payload
 
 
 def _prompt_chars(messages: List[Dict]) -> int:
@@ -150,6 +176,7 @@ def chat_completion(messages: List[Dict], temperature: float = 0.1, max_tokens: 
         'temperature': temperature,
         'max_tokens': max_tokens,
     }
+    _apply_thinking(payload, config)
 
     t0 = time.time()
     try:
@@ -202,6 +229,98 @@ def last_llm_error() -> Optional[str]:
     return LAST_LLM_ERROR
 
 
+def vision_extract_text(image_path: str, *, role: str = 'ocr_model',
+                        prompt: str = None, timeout: int = 60) -> Optional[str]:
+    """用视觉 LLM 提取图片中的文字（OpenAI 兼容多模态格式）。
+
+    优先用 ocr_model；未配置（无 model 或无 api_key）时退回 vision_model；
+    都没配置则返回 None，由调用方决定下一步（如降级到 Tesseract）。
+
+    适配：OpenAI / DashScope (Qwen-VL) / DeepSeek（不支持视觉时会报错，由上层 catch）。
+    返回纯文字，不含解释；空字符串视作失败。
+    """
+    import base64, mimetypes
+
+    # 角色降级：ocr_model 没配 → 试 vision_model
+    candidates = [role] if role else []
+    if 'vision_model' not in candidates:
+        candidates.append('vision_model')
+
+    config = None
+    chosen_role = None
+    for r in candidates:
+        cfg = current_llm_config(r)
+        if cfg.get('model') and cfg.get('api_key'):
+            config = cfg
+            chosen_role = r
+            break
+    if not config:
+        logger.info("vision_extract_text: 未配置 ocr_model / vision_model，跳过视觉 OCR")
+        return None
+
+    try:
+        with open(image_path, 'rb') as f:
+            b64 = base64.b64encode(f.read()).decode('ascii')
+        mime = mimetypes.guess_type(image_path)[0] or 'image/png'
+        data_url = f"data:{mime};base64,{b64}"
+    except Exception as exc:
+        logger.warning("vision_extract_text: 图片读取失败 path=%s err=%s", image_path, exc)
+        return None
+
+    user_prompt = prompt or (
+        '请提取图片中所有可见文字，按原文顺序输出，不要加任何解释、标题或 Markdown 格式。'
+        '如果图片不包含文字，请只回复"无文字"。'
+    )
+
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': f"Bearer {config['api_key']}",
+    }
+    payload = {
+        'model': config['model'],
+        'messages': [{
+            'role': 'user',
+            'content': [
+                {'type': 'text', 'text': user_prompt},
+                {'type': 'image_url', 'image_url': {'url': data_url}},
+            ],
+        }],
+        'temperature': 0.0,
+        'max_tokens': 4000,
+    }
+
+    t0 = time.time()
+    prompt_chars = len(user_prompt) + len(b64)
+    try:
+        response = requests.post(
+            f"{config['base_url']}/chat/completions",
+            headers=headers, json=payload, timeout=timeout,
+        )
+        latency_ms = int((time.time() - t0) * 1000)
+        if not response.ok:
+            err = f"HTTP {response.status_code}: {response.text[:300]}"
+            logger.error("vision OCR 失败 role=%s model=%s %s", chosen_role, config['model'], err)
+            log_llm_call(chosen_role, config['model'], config['base_url'], latency_ms, 'error',
+                         prompt_chars=prompt_chars, error=err)
+            return None
+        data = response.json()
+        text = data['choices'][0]['message']['content'] or ''
+        logger.info("vision OCR ok role=%s model=%s latency=%dms out=%d",
+                    chosen_role, config['model'], latency_ms, len(text))
+        log_llm_call(chosen_role, config['model'], config['base_url'], latency_ms, 'ok',
+                     prompt_chars=prompt_chars, response_chars=len(text))
+        cleaned = text.strip()
+        if cleaned in {'无文字', '无文字。', ''}:
+            return ''
+        return cleaned
+    except Exception as exc:
+        latency_ms = int((time.time() - t0) * 1000)
+        logger.exception("vision OCR 异常 role=%s model=%s", chosen_role, config['model'])
+        log_llm_call(chosen_role, config['model'], config['base_url'], latency_ms, 'error',
+                     prompt_chars=prompt_chars, error=f"{type(exc).__name__}: {exc}")
+        return None
+
+
 def stream_chat(messages: List[Dict], temperature: float = 0.1, max_tokens: int = 4000, role: str = 'llm'):
     """流式调用 LLM（生成器）"""
     config = current_llm_config(role)
@@ -223,6 +342,7 @@ def stream_chat(messages: List[Dict], temperature: float = 0.1, max_tokens: int 
         'max_tokens': max_tokens,
         'stream': True
     }
+    _apply_thinking(payload, config)
     
     try:
         response = requests.post(

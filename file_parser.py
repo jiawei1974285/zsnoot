@@ -262,6 +262,28 @@ def _read_excel_cell(cell, ns, shared_strings):
 
 
 def parse_image(file_path: str) -> str:
+    """图片 OCR：优先视觉 LLM，回退 Tesseract，都不可用时报清晰错误。
+
+    选择逻辑：
+      1. 配置了 ocr_model 或 vision_model（且都有 api_key）→ 走视觉 LLM
+         不依赖任何本地二进制，对中文支持也好
+      2. 未配置 → 尝试 pytesseract（需先 pip install pytesseract Pillow + 装 Tesseract 二进制）
+      3. 两条路都不通 → 报错时说清楚具体两条路各自为什么失败，方便排查
+    """
+    vision_err = None
+    try:
+        from llm_client import vision_extract_text
+        text = vision_extract_text(file_path, role='ocr_model')
+        if text:
+            return _ensure_nonempty(text, "图片 OCR (视觉 LLM)")
+        # text 为 None 表示没配置或调用失败；为 '' 表示模型说"无文字"
+        if text == '':
+            raise FileParseError("图片中未识别到文字（视觉 LLM 返回空）")
+    except FileParseError:
+        raise
+    except Exception as exc:
+        vision_err = str(exc)
+
     try:
         import pytesseract
         from PIL import Image
@@ -270,7 +292,13 @@ def parse_image(file_path: str) -> str:
         text = pytesseract.image_to_string(image, lang="chi_sim+eng")
         return _ensure_nonempty(text, "图片 OCR")
     except ImportError as exc:
-        raise FileParseError("图片 OCR 依赖缺失，请安装 Pillow、pytesseract 和 Tesseract") from exc
+        hint = (
+            "图片 OCR 不可用：\n"
+            "  · 视觉 LLM：" + (f"调用失败 ({vision_err})" if vision_err else "未配置 ocr_model / vision_model（推荐方式，无需装本地依赖）") + "\n"
+            "  · 本地 Tesseract：依赖未安装（pip install pytesseract Pillow 并装 Tesseract 二进制 + chi_sim 中文包）\n"
+            "建议在「系统配置 → OCR 模型」中填一个支持视觉的模型（Qwen-VL / GPT-4o 等）"
+        )
+        raise FileParseError(hint) from exc
     except Exception as exc:
         raise FileParseError(f"图片 OCR 失败: {exc}") from exc
 

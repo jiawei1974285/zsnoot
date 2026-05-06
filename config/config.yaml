@@ -2,10 +2,27 @@ llm:
   provider: openai
   temperature: 1
   max_tokens: 8000
+  # 深度思考（DeepSeek V4 / Reasoner 等支持）；关闭时与现状完全一致
+  thinking: false
+  reasoning_effort: high   # low | medium | high；仅当 thinking=true 时生效
 ingest:
   single_call: true
   max_tokens: 8000
   max_workers: 5
+  # 同 sha256 的文件若已在历史批次成功入库 → 直接复用既有 wiki 页，不再调 LLM
+  skip_unchanged: true
+chat:
+  # 关键词命中后沿 [[wiki-link]] 边走 N 跳，把强相关页拉进上下文
+  graph_expand: true
+  graph_hops: 1
+  graph_max_added: 5
+  # 上下文整体字符预算（之前硬编码 [:1000] 单页截断，长文档关键信息容易被切丢）
+  # 默认按 10 页 × 单页 10000 字 / wiki_share 估算上限
+  context_budget_chars: 150000
+  # wiki 内容占预算的比例，其余给提示模板和查询本身（按字符算不引入 tiktoken 依赖）
+  wiki_share: 0.75
+  # 单页最大字符数（默认 10000，含截断标记前的正文）
+  max_chars_per_page: 10000
 embedding:
   enabled: false
   model: shibing624/text2vec-base-chinese
@@ -56,6 +73,8 @@ vision_model:
   api_key: ''
   temperature: 0.5
   max_tokens: 8000
+  thinking: false
+  reasoning_effort: high
 ocr_model:
   provider: ''
   model: ''
@@ -63,6 +82,8 @@ ocr_model:
   api_key: ''
   temperature: 0.5
   max_tokens: 8000
+  thinking: false
+  reasoning_effort: high
 agent:
   skills:
   - enabled: true
