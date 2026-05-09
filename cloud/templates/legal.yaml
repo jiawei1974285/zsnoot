@@ -1,0 +1,62 @@
+# 法律 / 合规 schema 模板
+# 用途：律所、企业法务、合规审查；围绕案件、当事人、合同、法条、证据、判例
+key: legal
+label: 法律 / 合规
+description: 案件 / 当事人 / 合同 / 法条 / 证据 / 判例的法律知识库
+
+wiki_dirs:
+  - cases
+  - parties
+  - contracts
+  - laws
+  - regulations
+  - evidence
+  - precedents
+  - opinions
+  - notes
+  - outputs
+
+category_labels:
+  cases: 案件
+  parties: 当事人
+  contracts: 合同
+  laws: 法律法规
+  regulations: 监管规则
+  evidence: 证据
+  precedents: 判例
+  opinions: 法律意见
+  notes: 工作笔记
+  outputs: 问答记忆
+
+type_directory_map:
+  case: cases
+  party: parties
+  contract: contracts
+  law: laws
+  regulation: regulations
+  evidence: evidence
+  precedent: precedents
+  opinion: opinions
+  note: notes
+  output: outputs
+
+template_type_files: {}
+
+template_sections:
+  case: [基本事实, 当事人, 法律关系, 关联证据, 法律依据, 更新记录]
+  party: [基本信息, 关联案件, 权利义务, 来源与证据, 更新记录]
+  contract: [合同要素, 主要条款, 关联当事人, 风险点, 来源与证据, 更新记录]
+  evidence: [证据概况, 证明对象, 关联当事人, 真实性认定, 更新记录]
+  precedent: [基本案情, 裁判要点, 适用法条, 参考意义, 更新记录]
+  opinion: [问题, 结论, 依据, 风险, 建议, 更新记录]
+
+stable_types:
+  - case
+  - party
+  - contract
+  - law
+  - regulation
+  - evidence
+  - precedent
+  - opinion
+  - note

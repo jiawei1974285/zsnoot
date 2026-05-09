@@ -18,7 +18,15 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 
-_PROJECT_DIR = Path(__file__).parent
+# P2-B：日志路径跟随当前用户数据目录（绑定后 ~/.handynotes/<user>/mjq.log）
+def _resolve_log_dir() -> Path:
+    try:
+        from user_data import get_user_data_dir
+        return Path(get_user_data_dir())
+    except Exception:
+        return Path(__file__).parent
+
+_PROJECT_DIR = _resolve_log_dir()
 _LOG_PATH = _PROJECT_DIR / "mjq.log"
 _LLM_CALLS_PATH = _PROJECT_DIR / "data" / "llm_calls.jsonl"
 

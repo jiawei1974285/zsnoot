@@ -1,0 +1,80 @@
+# 警务办案 schema 模板
+# 用途：派出所/治安/刑侦日常办案，沿用现 schema.md
+key: police
+label: 警务办案
+description: 案件、嫌疑人、证据、办案技战法的常用知识结构
+
+wiki_dirs:
+  - cases
+  - persons
+  - locations
+  - organizations
+  - events
+  - evidence
+  - case_summaries
+  - crime_patterns
+  - conclusions
+  - laws
+  - techniques
+  - notes
+  - summaries
+  - outputs
+
+category_labels:
+  cases: 案件
+  persons: 人员
+  locations: 地点
+  organizations: 组织
+  events: 事件
+  evidence: 证据
+  case_summaries: 案件摘要
+  crime_patterns: 犯罪模式
+  conclusions: 研判结论
+  laws: 法规
+  techniques: 技战法
+  notes: 笔记
+  summaries: 研判
+  outputs: 问答记忆
+
+type_directory_map:
+  case: cases
+  person: persons
+  location: locations
+  law: laws
+  technique: techniques
+  note: notes
+  summary: summaries
+  output: outputs
+  organization: organizations
+  event: events
+  evidence: evidence
+  case_summary: case_summaries
+  crime_pattern: crime_patterns
+  conclusion: conclusions
+
+template_type_files:
+  person: persons.md
+  event: events.md
+  evidence: evidence.md
+  conclusion: conclusions.md
+
+template_sections:
+  person: [关联案件, 关联实体, 来源与证据, 更新记录]
+  event: [基本事实, 关联案件, 关联实体, 来源与证据, 更新记录]
+  evidence: [证据概况, 证明对象, 关联实体, 来源与证据, 更新记录]
+  conclusion: [结论, 依据, 可信度, 建议动作, 来源与证据, 更新记录]
+
+stable_types:
+  - case
+  - person
+  - location
+  - organization
+  - event
+  - evidence
+  - case_summary
+  - crime_pattern
+  - conclusion
+  - law
+  - technique
+  - note
+  - summary

@@ -8,6 +8,9 @@ from typing import Dict, List, Optional
 import yaml
 
 
+# P2 起：WIKI_DIRS 仅作为兼容默认值（警务模板）。
+# 真正的子目录列表由 schema_runtime.get_runtime(project_dir).wiki_dirs 决定，
+# 见 list_wiki_files 内的解析。
 WIKI_DIRS = [
     "cases",
     "persons",
@@ -42,9 +45,19 @@ def parse_frontmatter(content: str) -> tuple[Dict, str]:
 
 
 def list_wiki_files(project_dir: str) -> List[Path]:
+    """按当前 schema 列出 wiki 子目录内全部 .md 文件。
+
+    P2 起：子目录列表来自 schema_runtime（从 config/schema.yaml 读取，
+    无文件则用警务默认）。老调用方零迁移成本。
+    """
+    try:
+        from schema_runtime import get_runtime
+        subdirs = get_runtime(project_dir).wiki_dirs
+    except Exception:
+        subdirs = WIKI_DIRS
     root = Path(project_dir) / "wiki"
     files = []
-    for subdir in WIKI_DIRS:
+    for subdir in subdirs:
         directory = root / subdir
         if directory.exists():
             files.extend(directory.glob("*.md"))

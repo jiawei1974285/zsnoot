@@ -1,0 +1,66 @@
+# 财务 / 营销管理 schema 模板
+# 用途：企业经营管理：客户、项目、活动、订单、报表、风险
+key: business
+label: 财务与营销管理
+description: 客户 / 项目 / 营销活动 / 订单 / 报表 / 风险的经营知识库
+
+wiki_dirs:
+  - customers
+  - projects
+  - campaigns
+  - products
+  - orders
+  - transactions
+  - reports
+  - risks
+  - meetings
+  - notes
+  - outputs
+
+category_labels:
+  customers: 客户
+  projects: 项目
+  campaigns: 营销活动
+  products: 产品
+  orders: 订单
+  transactions: 交易记录
+  reports: 报表
+  risks: 风险
+  meetings: 会议纪要
+  notes: 工作笔记
+  outputs: 问答记忆
+
+type_directory_map:
+  customer: customers
+  project: projects
+  campaign: campaigns
+  product: products
+  order: orders
+  transaction: transactions
+  report: reports
+  risk: risks
+  meeting: meetings
+  note: notes
+  output: outputs
+
+template_type_files: {}
+
+template_sections:
+  customer: [基本信息, 关键联系人, 历史合作, 风险与机会, 更新记录]
+  project: [项目背景, 关键里程碑, 关联客户, 收入与成本, 风险, 更新记录]
+  campaign: [活动目标, 投放渠道, 预算与产出, 关联客户, 复盘, 更新记录]
+  order: [订单要素, 关联客户与产品, 履约状态, 财务影响, 更新记录]
+  report: [核心结论, 关键指标, 数据来源, 后续动作, 更新记录]
+  risk: [风险描述, 影响与可能性, 缓解措施, 责任人, 跟踪记录, 更新记录]
+
+stable_types:
+  - customer
+  - project
+  - campaign
+  - product
+  - order
+  - transaction
+  - report
+  - risk
+  - meeting
+  - note

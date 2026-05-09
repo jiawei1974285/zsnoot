@@ -98,3 +98,9 @@ tests/__pycache__/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# 云端控制面运行时数据（P1 起）
+cloud/data/
+config/jwt.secret
+frontend/.env.local
+data/machine_binding.json

@@ -1,0 +1,65 @@
+# 科研 / 项目管理 schema 模板
+# 用途：研究项目、文献综述、实验、协作记录
+key: research
+label: 科研 / 项目管理
+description: 项目 / 任务 / 文献 / 实验 / 数据 / 结论的研究知识库
+
+wiki_dirs:
+  - projects
+  - tasks
+  - literatures
+  - experiments
+  - datasets
+  - hypotheses
+  - conclusions
+  - meetings
+  - collaborators
+  - notes
+  - outputs
+
+category_labels:
+  projects: 项目
+  tasks: 任务
+  literatures: 文献
+  experiments: 实验
+  datasets: 数据集
+  hypotheses: 假设
+  conclusions: 结论
+  meetings: 会议
+  collaborators: 协作者
+  notes: 笔记
+  outputs: 问答记忆
+
+type_directory_map:
+  project: projects
+  task: tasks
+  literature: literatures
+  experiment: experiments
+  dataset: datasets
+  hypothesis: hypotheses
+  conclusion: conclusions
+  meeting: meetings
+  collaborator: collaborators
+  note: notes
+  output: outputs
+
+template_type_files: {}
+
+template_sections:
+  project: [研究目标, 研究方法, 关联文献, 关联实验, 进度, 更新记录]
+  literature: [来源信息, 核心论点, 方法与数据, 关联假设, 笔记, 更新记录]
+  experiment: [实验设计, 变量, 步骤, 结果, 关联假设, 更新记录]
+  hypothesis: [陈述, 支持依据, 反驳依据, 验证状态, 更新记录]
+  conclusion: [结论, 依据, 局限, 后续工作, 更新记录]
+
+stable_types:
+  - project
+  - task
+  - literature
+  - experiment
+  - dataset
+  - hypothesis
+  - conclusion
+  - meeting
+  - collaborator
+  - note

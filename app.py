@@ -28,13 +28,26 @@ def _project_dir():
 
 app = Flask(__name__)
 
-# 项目根目录
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+# === 路径解析（P2-B：拆分代码 vs 用户数据）===
+# INSTALL_DIR = 代码安装目录（frontend/dist、jwt.secret、Flask session secret 都在这里）
+# PROJECT_DIR = 用户数据目录（wiki/raw/data/config/.env 都在这里）
+#   - 有绑定（machine_binding.json）时 → ~/.handynotes/<cloud_user>/
+#   - 无绑定时 → INSTALL_DIR（老部署 0 迁移）
+# 大量历史代码以 PROJECT_DIR 名义引用数据路径，故沿用此符号；新增 INSTALL_DIR
+# 给真正"代码安装"语义的少数路径专用。
+from user_data import (  # noqa: E402
+    INSTALL_DIR,
+    get_user_data_dir,
+    current_bound_user,
+)
+PROJECT_DIR = get_user_data_dir()
+# 当老部署没有绑定时，PROJECT_DIR == INSTALL_DIR，行为完全等价于 P2-A 之前。
 
 
 # === Session secret_key ===
 def _load_or_create_secret_key():
-    secret_path = os.path.join(PROJECT_DIR, 'config', 'secret.key')
+    # session secret 与 Flask 进程绑定（不是用户数据），放 INSTALL_DIR
+    secret_path = os.path.join(INSTALL_DIR, 'config', 'secret.key')
     if os.path.exists(secret_path):
         with open(secret_path, 'rb') as f:
             data = f.read().strip()
@@ -295,12 +308,31 @@ def get_custom_wiki_categories():
     return categories
 
 
+def _schema_subdirs():
+    """从 schema_runtime 取当前用户的 wiki 子目录；失败回退到 DEFAULT_WIKI_SUBDIRS。"""
+    try:
+        from schema_runtime import get_runtime
+        return get_runtime(PROJECT_DIR).wiki_dirs
+    except Exception:
+        return DEFAULT_WIKI_SUBDIRS
+
+
+def _schema_labels():
+    try:
+        from schema_runtime import get_runtime
+        return get_runtime(PROJECT_DIR).category_labels
+    except Exception:
+        return DEFAULT_WIKI_CATEGORY_LABELS
+
+
 def get_wiki_subdirs():
-    return DEFAULT_WIKI_SUBDIRS + [item['key'] for item in get_custom_wiki_categories()]
+    base = _schema_subdirs()
+    return list(base) + [item['key'] for item in get_custom_wiki_categories() if item['key'] not in base]
 
 
 def get_wiki_category_options():
-    options = [{'key': key, 'label': DEFAULT_WIKI_CATEGORY_LABELS.get(key, key)} for key in DEFAULT_WIKI_SUBDIRS]
+    labels = _schema_labels()
+    options = [{'key': key, 'label': labels.get(key, key)} for key in _schema_subdirs()]
     options.extend(get_custom_wiki_categories())
     return options
 
@@ -312,7 +344,8 @@ def ensure_custom_category_dirs():
 
 def update_schema_custom_categories():
     """Sync custom category documentation into schema.md."""
-    schema_path = os.path.join(PROJECT_DIR, 'schema.md')
+    # schema.md 是人读文档，与代码同寿命 → INSTALL_DIR
+    schema_path = os.path.join(INSTALL_DIR, 'schema.md')
     categories = get_custom_wiki_categories()
     if not os.path.exists(schema_path):
         return
@@ -475,28 +508,130 @@ def save_wiki_page(slug, page_type, meta, body):
 
 # ==================== 鉴权中间件 ====================
 
-# 免登录的路径前缀(静态资源 + auth 端点 + 登录前必需的状态查询)
+# 免登录的路径前缀(静态资源 + auth 端点 + 登录前必需的状态查询 + 健康检查)
 _AUTH_PUBLIC_PREFIXES = (
     '/api/auth/',
+    '/api/health',
 )
 _AUTH_PUBLIC_EXACT = {'/', '/logo.png', '/favicon.ico'}
+
+
+# ─── 云本机分离模式（P1 起）────────────────────────────────────
+# 当浏览器从云端前端发请求过来时：
+#   - 跨域 → CORS 头放行（origin 来自 MJQ_LOCAL_CORS_ORIGINS）
+#   - 鉴权 → Authorization: Bearer <jwt> 验签后写入 flask.g
+# 单体模式（不设环境变量）行为完全不变。
+def _local_cors_origins() -> List[str]:
+    raw = os.environ.get('MJQ_LOCAL_CORS_ORIGINS', '').strip()
+    if raw:
+        return [o.strip() for o in raw.split(',') if o.strip()]
+    # 默认开发端口
+    return [
+        'http://localhost:5174', 'http://127.0.0.1:5174',
+        'http://localhost:4174', 'http://127.0.0.1:4174',
+    ]
+
+
+def _jwt_secret_cached():
+    """惰性加载 JWT 共享密钥（与 cloud/main.py 共用文件）。
+
+    没装 PyJWT 或没设密钥 → 返回 None，本机 agent 退化为单体 session 模式。
+    """
+    cached = getattr(_jwt_secret_cached, '_cache', None)
+    if cached is not None:
+        return cached or None  # '' 也表示已尝试过
+    try:
+        from cloud.jwt_utils import load_or_create_secret
+        # JWT secret 是云本机共享的 → INSTALL_DIR（与 cloud/main.py 用同一份）
+        secret = load_or_create_secret(INSTALL_DIR)
+    except Exception as exc:  # 包括 PyJWT 未安装
+        logger.warning(f"[auth] JWT 不可用，本机 agent 仅支持 session 模式：{exc}")
+        secret = ''
+    _jwt_secret_cached._cache = secret
+    return secret or None
+
+
+@app.after_request
+def _apply_local_cors(resp):
+    origin = request.headers.get('Origin', '')
+    if origin and origin in _local_cors_origins():
+        resp.headers['Access-Control-Allow-Origin'] = origin
+        resp.headers['Access-Control-Allow-Credentials'] = 'true'
+        resp.headers['Vary'] = 'Origin'
+        resp.headers['Access-Control-Allow-Headers'] = 'Authorization, Content-Type'
+        resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    return resp
 
 
 @app.before_request
 def _require_login():
     from auth import current_username
+    from flask import g
     path = request.path or ''
-    # 静态资源和登录端点放行
+
+    # CORS 预检放行（OPTIONS）
+    if request.method == 'OPTIONS' and path.startswith('/api/'):
+        return ('', 204)
+
+    # 公开路径优先放行（包括 /api/health 与 /api/auth/* —— 让前端在未绑定时仍能探测）
     if path in _AUTH_PUBLIC_EXACT:
         return None
     if path.startswith('/assets/'):
         return None
     if any(path.startswith(p) for p in _AUTH_PUBLIC_PREFIXES):
         return None
+
+    # ── JWT bridge：把 cloud 颁发的 access token 翻译成本请求的 g.user ──
+    auth_header = request.headers.get('Authorization', '')
+    if auth_header.startswith('Bearer '):
+        token = auth_header[7:].strip()
+        secret = _jwt_secret_cached()
+        if secret and token:
+            try:
+                from cloud.jwt_utils import verify_token, InvalidTokenError
+                claims = verify_token(secret, token, expected_typ='access')
+                jwt_user = claims.get('sub')
+                # P2-B：本机绑定校验（多租户隔离的硬闸门）
+                bound = current_bound_user()
+                if bound is None:
+                    # 未绑定：可选自动绑定（开发友好），否则强制要求显式 bind
+                    if os.environ.get('MJQ_AUTOBIND', '').lower() in {'1', 'true', 'yes'}:
+                        try:
+                            from user_data import bind_machine_to
+                            bind_machine_to(jwt_user)
+                            return jsonify({
+                                'error': 'agent_just_bound',
+                                'message': f'本机 agent 已绑定到 {jwt_user}，请重启 agent 后重试',
+                                'bound_user': jwt_user,
+                            }), 409
+                        except Exception as exc:
+                            logger.warning(f"[bind] auto-bind failed: {exc}")
+                    return jsonify({
+                        'error': 'agent_not_bound',
+                        'message': '本机 agent 尚未绑定云端用户。请运行: python -m scripts.bind_user bind <username>',
+                    }), 412
+                if jwt_user != bound:
+                    return jsonify({
+                        'error': 'wrong_user',
+                        'message': f'本机 agent 已绑定到 {bound}，不接受 {jwt_user} 的 token',
+                        'bound_user': bound,
+                    }), 403
+                g.user = jwt_user
+                g.user_role = claims.get('role')
+                # 首次见到此用户 → 拉云端 schema 写本地 config/schema.yaml
+                try:
+                    from agent_bootstrap import ensure_schema_for
+                    ensure_schema_for(PROJECT_DIR, g.user, token)
+                except Exception as exc:
+                    logger.warning(f"[bootstrap] schema sync skipped: {exc}")
+            except Exception as exc:
+                # 验签失败不直接 401——继续走原有逻辑（公开端点仍可放行）
+                logger.debug(f"[auth] JWT verify failed: {exc}")
+
     # 非 API 路径(如 SPA 内部路由请求)放行,让前端自己处理
     if not path.startswith('/api/'):
         return None
-    # API 路径必须登录
+    # API 路径必须登录（session 模式 fallback；JWT 已在上面被翻译成 session 等价态）
     if not current_username():
         return jsonify({'error': 'unauthorized'}), 401
     return None
@@ -793,7 +928,8 @@ def api_stats():
 
 @app.route('/')
 def index():
-    frontend_dist = os.path.join(PROJECT_DIR, 'frontend', 'dist')
+    # 前端是代码资源，不随用户切换 → INSTALL_DIR
+    frontend_dist = os.path.join(INSTALL_DIR, 'frontend', 'dist')
     if os.path.exists(os.path.join(frontend_dist, 'index.html')):
         return send_from_directory(frontend_dist, 'index.html')
     return render_template('index.html')
@@ -801,7 +937,7 @@ def index():
 
 @app.route('/assets/<path:filename>')
 def frontend_assets(filename):
-    frontend_assets_dir = os.path.join(PROJECT_DIR, 'frontend', 'dist', 'assets')
+    frontend_assets_dir = os.path.join(INSTALL_DIR, 'frontend', 'dist', 'assets')
     if os.path.exists(frontend_assets_dir):
         return send_from_directory(frontend_assets_dir, filename)
     return jsonify({'error': 'Asset not found'}), 404
@@ -812,7 +948,7 @@ def frontend_public(filename):
     """服务 frontend/dist 根目录下的静态文件 (logo.png / favicon 等)"""
     if filename.startswith('api/') or filename.startswith('assets/'):
         return jsonify({'error': 'Not found'}), 404
-    frontend_dist = os.path.join(PROJECT_DIR, 'frontend', 'dist')
+    frontend_dist = os.path.join(INSTALL_DIR, 'frontend', 'dist')
     file_path = os.path.join(frontend_dist, filename)
     if os.path.isfile(file_path):
         return send_from_directory(frontend_dist, filename)
@@ -2154,6 +2290,266 @@ def api_test_llm_config():
 def api_wiki_categories():
     """获取知识目录分类配置。"""
     return jsonify(get_wiki_category_options())
+
+
+# ==================== 孤立实体 / 孤立页面（P3） ====================
+
+# ==================== 源文档预览（P4） ====================
+
+def _resolve_safe_raw_path(rel_path: str) -> Optional[str]:
+    """把前端传来的相对路径安全解析到 raw 目录内。
+
+    规则：
+      - 拒绝绝对路径、含 .. 的逃逸尝试
+      - 解析后必须 commonpath 落在 raw 根（含 raw/sources 与 raw/inbox）
+      - 必须是普通文件
+    返回 abs path 或 None。
+    """
+    if not rel_path or not isinstance(rel_path, str):
+        return None
+    if os.path.isabs(rel_path) or '..' in Path(rel_path).parts:
+        return None
+    from config_store import get_raw_dir
+    raw_root = os.path.realpath(get_raw_dir(PROJECT_DIR))
+    candidate = os.path.realpath(os.path.join(raw_root, rel_path))
+    try:
+        if os.path.commonpath([raw_root, candidate]) != raw_root:
+            return None
+    except ValueError:
+        return None
+    if not os.path.isfile(candidate):
+        return None
+    return candidate
+
+
+_RAW_MIME = {
+    '.pdf': 'application/pdf',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.bmp': 'image/bmp',
+    '.webp': 'image/webp',
+    '.svg': 'image/svg+xml',
+    '.txt': 'text/plain; charset=utf-8',
+    '.md': 'text/markdown; charset=utf-8',
+    '.html': 'text/html; charset=utf-8',
+}
+
+
+@app.route('/api/health', methods=['GET'])
+def api_local_health():
+    """本机 agent 健康检查 + 绑定状态披露（前端连接灯用）。
+
+    设计为公开端点（不需要 JWT），让浏览器在"还没拿到 token"阶段就能探测本机存活。
+    返回最少必要信息，避免暴露细节。
+    """
+    from user_data import current_bound_user, is_legacy_mode
+    bound = current_bound_user()
+    return jsonify({
+        'status': 'ok',
+        'service': 'mjq-agent',
+        'phase': 'P5',
+        'bound_user': bound,         # None 表示 legacy 模式
+        'legacy_mode': is_legacy_mode(),
+    })
+
+
+@app.route('/api/source/preview', methods=['GET'])
+def api_source_preview():
+    """文本/解析形式预览源文档。
+
+    query: path=<raw 内的相对路径>&format=text|info（默认 text）
+      - text: 用 file_parser 解析；返回 {text, file_type, size}
+      - info: 仅元数据，不读内容；返回 {file_type, size, mtime}
+    """
+    rel = request.args.get('path', '').strip()
+    fmt = request.args.get('format', 'text').strip().lower()
+    abs_path = _resolve_safe_raw_path(rel)
+    if not abs_path:
+        return jsonify({'error': 'path 非法或文件不存在'}), 400
+
+    stat = os.stat(abs_path)
+    base_info = {
+        'path': rel.replace('\\', '/'),
+        'size': stat.st_size,
+        'mtime': int(stat.st_mtime),
+        'file_type': Path(abs_path).suffix.lower(),
+    }
+    if fmt == 'info':
+        return jsonify(base_info)
+
+    # 文本/解析路径
+    from file_parser import parse_file, FileParseError
+    # 大文件保护：超过 10 MB 的解析很慢，前端应该改用 raw 流式预览
+    if stat.st_size > 10 * 1024 * 1024:
+        return jsonify({
+            **base_info,
+            'error': 'file_too_large',
+            'message': f'文件 {stat.st_size // (1024*1024)} MB 超过 10 MB 解析上限，请使用 /api/source/raw 直接预览二进制',
+        }), 413
+    try:
+        text = parse_file(abs_path)
+    except FileParseError as exc:
+        return jsonify({**base_info, 'error': str(exc)}), 422
+    except Exception as exc:
+        logger.exception('[preview] parse failed')
+        return jsonify({**base_info, 'error': f'解析失败：{exc}'}), 500
+    # 长文本截断给前端，避免一次发几兆 JSON
+    truncated = False
+    max_chars = 50000
+    if len(text) > max_chars:
+        text = text[:max_chars]
+        truncated = True
+    return jsonify({**base_info, 'text': text, 'truncated': truncated})
+
+
+@app.route('/api/source/raw', methods=['GET'])
+def api_source_raw():
+    """流式返回源文档二进制，给浏览器内嵌（PDF / 图片）用。
+
+    query: path=<rel>
+    Content-Type 按扩展名映射；其他类型按 application/octet-stream + 强制下载。
+    """
+    rel = request.args.get('path', '').strip()
+    abs_path = _resolve_safe_raw_path(rel)
+    if not abs_path:
+        return jsonify({'error': 'path 非法或文件不存在'}), 400
+    ext = Path(abs_path).suffix.lower()
+    mimetype = _RAW_MIME.get(ext, 'application/octet-stream')
+    inline = ext in _RAW_MIME  # 已知类型可内嵌；其他强制下载
+    return send_from_directory(
+        os.path.dirname(abs_path),
+        os.path.basename(abs_path),
+        mimetype=mimetype,
+        as_attachment=not inline,
+        download_name=os.path.basename(abs_path),
+    )
+
+
+@app.route('/api/orphans/scan', methods=['GET'])
+def api_orphans_scan():
+    """扫描当前 wiki，返回 dangling links 与 orphan pages。"""
+    from orphan_detector import scan_links
+    try:
+        return jsonify(scan_links(PROJECT_DIR))
+    except Exception as exc:
+        logger.exception("[orphan] scan failed")
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/orphans/dangling/auto-fill', methods=['POST'])
+def api_orphans_auto_fill():
+    """为所有 dangling links 自动生成占位页面。
+
+    body: { use_llm?: bool=true, limit?: int }
+    use_llm=false 时纯模板化（无 LLM 调用）。
+    """
+    from orphan_detector import auto_fill_dangling
+    data = request.json or {}
+    use_llm = bool(data.get('use_llm', True))
+    limit = data.get('limit')
+    try:
+        result = auto_fill_dangling(PROJECT_DIR, use_llm=use_llm, limit=limit)
+    except Exception as exc:
+        logger.exception("[orphan] auto-fill failed")
+        return jsonify({'error': str(exc)}), 500
+    try:
+        from activity_log import record
+        record(PROJECT_DIR, 'orphan_auto_fill', None, {
+            'created': len(result.get('created', [])),
+            'skipped': len(result.get('skipped', [])),
+        })
+    except Exception:
+        pass
+    return jsonify(result)
+
+
+@app.route('/api/orphans/index/refresh', methods=['POST'])
+def api_orphans_index_refresh():
+    """把当前孤立页面列表写入 wiki/index.md 的「待整理」区块。"""
+    from orphan_detector import mark_orphans_in_index
+    try:
+        return jsonify(mark_orphans_in_index(PROJECT_DIR))
+    except Exception as exc:
+        logger.exception("[orphan] index refresh failed")
+        return jsonify({'error': str(exc)}), 500
+
+
+# ==================== 定时任务（P4） ====================
+
+@app.route('/api/schedule/tasks', methods=['GET'])
+def api_schedule_list():
+    import scheduler as sched
+    return jsonify({'tasks': sched.list_tasks(PROJECT_DIR), 'kinds': list(sched.TASK_KINDS.keys())})
+
+
+@app.route('/api/schedule/tasks', methods=['POST'])
+def api_schedule_create():
+    import scheduler as sched
+    data = request.json or {}
+    try:
+        task = sched.create_task(
+            PROJECT_DIR,
+            name=data.get('name', ''),
+            kind=data.get('kind', ''),
+            schedule=data.get('schedule') or {},
+            enabled=bool(data.get('enabled', True)),
+        )
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    return jsonify(task)
+
+
+@app.route('/api/schedule/tasks/<task_id>', methods=['PUT'])
+def api_schedule_update(task_id):
+    import scheduler as sched
+    data = request.json or {}
+    try:
+        task = sched.update_task(PROJECT_DIR, task_id, **data)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    if not task:
+        return jsonify({'error': 'task not found'}), 404
+    return jsonify(task)
+
+
+@app.route('/api/schedule/tasks/<task_id>', methods=['DELETE'])
+def api_schedule_delete(task_id):
+    import scheduler as sched
+    if not sched.delete_task(PROJECT_DIR, task_id):
+        return jsonify({'error': 'task not found'}), 404
+    return jsonify({'status': 'ok'})
+
+
+@app.route('/api/schedule/tasks/<task_id>/run-now', methods=['POST'])
+def api_schedule_run_now(task_id):
+    import scheduler as sched
+    task = sched.run_now(PROJECT_DIR, task_id)
+    if not task:
+        return jsonify({'error': 'task not found'}), 404
+    return jsonify(task)
+
+
+# 进程启动时挂上 scheduler（依赖 PROJECT_DIR 已 resolve）
+def _start_scheduler_once():
+    try:
+        import scheduler as sched
+        sched.start(PROJECT_DIR)
+    except Exception as exc:
+        logger.warning(f"[scheduler] failed to start at boot: {exc}")
+
+
+def _start_heartbeat_once():
+    try:
+        import heartbeat
+        heartbeat.start(PROJECT_DIR)
+    except Exception as exc:
+        logger.warning(f"[heartbeat] failed to start at boot: {exc}")
+
+
+_start_scheduler_once()
+_start_heartbeat_once()
 
 
 @app.route('/api/themes', methods=['GET'])

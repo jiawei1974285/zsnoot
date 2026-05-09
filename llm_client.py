@@ -25,7 +25,12 @@ def load_env_file(path):
                     env_vars[key.strip()] = val.strip()
     return env_vars
 
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+# P2-B：.env / config.yaml 都是用户数据 → 跟着 user_data 走
+try:
+    from user_data import get_user_data_dir as _data_dir
+    PROJECT_DIR = _data_dir()
+except Exception:
+    PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def current_env():
@@ -36,7 +41,7 @@ def current_env():
 def load_yaml_config():
     try:
         from config_store import load_config
-        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config', 'config.yaml')
+        config_path = os.path.join(PROJECT_DIR, 'config', 'config.yaml')
         return load_config(config_path)
     except Exception:
         return {}

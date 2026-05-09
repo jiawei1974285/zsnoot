@@ -1,0 +1,54 @@
+# 通用知识库 schema 模板
+# 用途：兜底场景；也是 Schema 合成 agent 的种子
+# 五类核心节点：人 / 组织 / 事件 / 地点 / 概念 + 笔记 / 输出
+key: general
+label: 通用知识库
+description: 人 / 组织 / 事件 / 地点 / 概念的通用知识结构（也是 Schema 合成的种子）
+
+wiki_dirs:
+  - persons
+  - organizations
+  - events
+  - locations
+  - concepts
+  - documents
+  - notes
+  - outputs
+
+category_labels:
+  persons: 人物
+  organizations: 组织
+  events: 事件
+  locations: 地点
+  concepts: 概念
+  documents: 文档
+  notes: 笔记
+  outputs: 问答记忆
+
+type_directory_map:
+  person: persons
+  organization: organizations
+  event: events
+  location: locations
+  concept: concepts
+  document: documents
+  note: notes
+  output: outputs
+
+template_type_files: {}
+
+template_sections:
+  person: [基本信息, 关联组织, 关联事件, 来源, 更新记录]
+  organization: [基本信息, 成员, 关联事件, 来源, 更新记录]
+  event: [基本事实, 关联人物, 关联组织, 关联地点, 来源, 更新记录]
+  location: [基本信息, 关联事件, 来源, 更新记录]
+  concept: [定义, 关键特征, 关联实体, 来源, 更新记录]
+
+stable_types:
+  - person
+  - organization
+  - event
+  - location
+  - concept
+  - document
+  - note

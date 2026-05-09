@@ -19,8 +19,22 @@ from mjq_logging import get_logger
 
 logger = get_logger(__name__)
 
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+# P2-B：数据路径从 user_data 解析（绑定时 ~/.handynotes/<user>/，未绑定时 install_dir）
+# 老调用方传递的 PROJECT_DIR/WIKI_DIR 仍以本模块常量为准；note_intake.py 中的运行时 swap 也可正常工作。
+try:
+    from user_data import get_user_data_dir as _resolve_data_dir
+    PROJECT_DIR = _resolve_data_dir()
+except Exception:  # 防御性：user_data 未就绪时退回 install dir
+    PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 WIKI_DIR = os.path.join(PROJECT_DIR, 'wiki')
+
+# ─── P2 起：以下 4 个映射改为从 schema_runtime 读取（按 schema.yaml 决定） ──
+# 保留同名常量作为兼容入口（== 警务模板默认值），原有外部代码 / tests 仍可读到合理结果。
+# 真正的运行时映射统一走 _runtime() 解析，自动按当前用户 schema 切换。
+def _runtime():
+    from schema_runtime import current_runtime
+    return current_runtime()
+
 
 INTELLIGENCE_TYPE_DIRS = {
     'case': 'cases',
@@ -64,13 +78,14 @@ def load_agent_config() -> Dict:
 
 def custom_category_map() -> Dict[str, str]:
     config = load_agent_config()
+    runtime_type_dirs = _runtime().type_directory_map
     result = {}
     for item in config.get('wiki', {}).get('custom_categories', []) or []:
         if not isinstance(item, dict):
             continue
         key = str(item.get('key') or item.get('name') or '').strip().lower()
         label = str(item.get('label') or item.get('name') or key).strip()
-        if key in INTELLIGENCE_TYPE_DIRS:
+        if key in runtime_type_dirs:
             continue
         if key:
             result[key] = label
@@ -78,24 +93,15 @@ def custom_category_map() -> Dict[str, str]:
 
 
 def type_directory_policy_text() -> str:
-    stable_types = [
-        'case',
-        'person',
-        'location',
-        'organization',
-        'event',
-        'evidence',
-        'case_summary',
-        'crime_pattern',
-        'conclusion',
-        'law',
-        'technique',
-        'note',
-        'summary',
-    ]
+    runtime = _runtime()
+    type_dirs = runtime.type_directory_map
+    stable_types = runtime.stable_types or list(type_dirs.keys())
     lines = ["Type-directory rules:"]
     for page_type in stable_types:
-        lines.append(f"- {page_type} -> wiki/{INTELLIGENCE_TYPE_DIRS[page_type]}/")
+        target = type_dirs.get(page_type)
+        if not target:
+            continue
+        lines.append(f"- {page_type} -> wiki/{target}/")
     for page_type, label in custom_category_map().items():
         lines.append(f"- {page_type} -> wiki/{page_type}/ ({label})")
     lines.extend([
@@ -188,7 +194,8 @@ def normalize_generated_file_path(block: Dict) -> str:
 
     meta = block.get('meta') or {}
     page_type = str(meta.get('type') or '').strip().lower()
-    target_dir = INTELLIGENCE_TYPE_DIRS.get(page_type) or (page_type if page_type in custom_category_map() else None)
+    type_dirs = _runtime().type_directory_map
+    target_dir = type_dirs.get(page_type) or (page_type if page_type in custom_category_map() else None)
     if not target_dir:
         return rel_path
 
@@ -202,16 +209,27 @@ def normalize_generated_file_path(block: Dict) -> str:
 
 
 def _template_sections_from_file(page_type: str) -> List[str]:
-    template_name = TEMPLATE_TYPE_FILES.get(page_type)
+    runtime = _runtime()
+    template_name = runtime.template_type_files.get(page_type)
+    fallback = runtime.template_sections.get(page_type) or []
     if not template_name:
-        return DEFAULT_TEMPLATE_SECTIONS.get(page_type, [])
+        return list(fallback)
+    # 优先用户 wiki/templates/，找不到再回退到 install_dir/wiki/templates/（种子模板）
     template_path = os.path.join(WIKI_DIR, 'templates', template_name)
     if not os.path.exists(template_path):
-        return DEFAULT_TEMPLATE_SECTIONS.get(page_type, [])
+        try:
+            from user_data import get_install_wiki_templates_dir
+            seed = os.path.join(get_install_wiki_templates_dir(), template_name)
+            if os.path.exists(seed):
+                template_path = seed
+            else:
+                return list(fallback)
+        except Exception:
+            return list(fallback)
     with open(template_path, 'r', encoding='utf-8') as f:
         template = f.read()
     sections = re.findall(r'^##\s+(.+?)\s*$', template, re.MULTILINE)
-    return sections or DEFAULT_TEMPLATE_SECTIONS.get(page_type, [])
+    return sections or list(fallback)
 
 
 def apply_intelligence_template(block: Dict) -> str:

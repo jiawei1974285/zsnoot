@@ -4,6 +4,8 @@
 
 # === Web 框架 + 鉴权 ===
 Flask>=3.0           # Web 框架（自带 Werkzeug 提供密码哈希）
+PyJWT>=2.8           # 云端 → 本机 agent 的短期访问令牌（云本机分离，P1 起启用）
+APScheduler>=3.10    # 本机定时任务调度（P4 起启用，inbox 轮询/孤页扫描等）
 
 # === 配置与序列化 ===
 PyYAML>=6.0          # config/config.yaml + frontmatter 解析

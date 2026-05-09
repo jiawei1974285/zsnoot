@@ -18,7 +18,7 @@ from datetime import datetime
 from functools import wraps
 from typing import Dict, List, Optional
 
-from flask import jsonify, session
+from flask import g, jsonify, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
 
@@ -82,13 +82,18 @@ def migrate_users(project_dir: str) -> int:
 
 
 def _public_user(user: Dict) -> Dict:
-    """返回不含密码哈希的安全副本。"""
+    """返回不含密码哈希的安全副本。
+
+    P2 起新增 template_key —— 注册时由用户选模板（或 admin setup 时缺省 police）；
+    本机 agent 用它从云端拉对应 schema.yaml。
+    """
     return {
         "username": user.get("username"),
         "role": user.get("role", "member"),
         "unit": user.get("unit", ""),
         "title": user.get("title", ""),
         "email": user.get("email", ""),
+        "template_key": user.get("template_key", ""),
         "created_at": user.get("created_at"),
     }
 
@@ -192,9 +197,36 @@ def get_user(project_dir: str, username: str) -> Optional[Dict]:
     return None
 
 
+def update_user_fields(project_dir: str, username: str, **fields) -> Optional[Dict]:
+    """更新指定用户的非敏感字段（如 template_key、unit、title）。
+
+    白名单：template_key / unit / title / email / schema_version / custom_schema；
+    其它字段（password_hash / role / created_at）需要专用流程。
+    custom_schema 可以是 dict（schema_synth 产物）或空 dict 表示清除。
+    """
+    allowed = {"template_key", "unit", "title", "email", "schema_version", "custom_schema"}
+    safe = {k: v for k, v in fields.items() if k in allowed and v is not None}
+    if not safe:
+        return get_user(project_dir, username)
+    users = _load_users(project_dir)
+    for user in users:
+        if user.get("username") == username:
+            user.update(safe)
+            _save_users(project_dir, users)
+            return _public_user(user)
+    return None
+
+
 def is_admin(project_dir: str, username: Optional[str]) -> bool:
     if not username:
         return False
+    # 云本机分离模式：JWT 中间件已把 role 写入 flask.g；本地 users.json 里没这个用户也算 admin。
+    try:
+        if getattr(g, "user_role", None):
+            return g.user_role == "admin"
+    except RuntimeError:
+        # 不在 Flask request context 里（如单测直接调用）——退回本地查询
+        pass
     user = get_user(project_dir, username)
     return bool(user and user.get("role") == "admin")
 
@@ -215,6 +247,18 @@ def change_password(project_dir: str, username: str, old_password: str, new_pass
 
 
 def current_username() -> Optional[str]:
+    """当前登录用户名。
+
+    优先级：
+      1. flask.g.user —— 云本机分离模式下，JWT 中间件已写入
+      2. session["user"] —— 单体模式（旧）的 cookie session
+    """
+    try:
+        if getattr(g, "user", None):
+            return g.user
+    except RuntimeError:
+        # 不在 Flask request context 里
+        pass
     return session.get("user")
 
 

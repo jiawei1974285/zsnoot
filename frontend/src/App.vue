@@ -135,6 +135,27 @@
           <el-form-item>
             <el-input v-model="registerForm.email" placeholder="邮箱（选填）" size="large" @keyup.enter="submitRegister" />
           </el-form-item>
+          <el-form-item v-if="schemaTemplates.length">
+            <div class="schema-template-picker">
+              <div class="schema-template-label">选择适合你工作场景的 Schema 模板</div>
+              <div class="schema-template-grid">
+                <button
+                  v-for="tpl in schemaTemplates"
+                  :key="tpl.key"
+                  type="button"
+                  class="schema-template-card"
+                  :class="{ active: registerForm.template_key === tpl.key }"
+                  @click="registerForm.template_key = tpl.key"
+                >
+                  <div class="schema-template-card-title">{{ tpl.label }}</div>
+                  <div class="schema-template-card-desc">{{ tpl.description }}</div>
+                  <div class="schema-template-card-meta">
+                    {{ tpl.category_count }} 类目 · {{ tpl.type_count }} 节点类型
+                  </div>
+                </button>
+              </div>
+            </div>
+          </el-form-item>
           <el-button type="primary" size="large" :loading="authSubmitting" class="auth-primary-button" @click="submitRegister">
             注册并登录
           </el-button>
@@ -207,6 +228,11 @@
         </nav>
 
         <div class="rail-spacer"></div>
+
+        <button class="rail-button rail-maintenance-button" @click="openMaintenance">
+          <el-icon><Tools /></el-icon>
+          <span class="rail-label">知识维护</span>
+        </button>
 
         <div class="rail-user-card">
           <div class="connection-line">
@@ -1432,6 +1458,199 @@
         </template>
       </div>
     </el-drawer>
+
+    <!-- 新建定时任务（P4） -->
+    <el-dialog v-model="newScheduleTaskDialog" title="新建定时任务" width="520px">
+      <el-form label-width="86px" label-position="left">
+        <el-form-item label="名称">
+          <el-input v-model="newScheduleTask.name" placeholder="例如：每天凌晨 2 点扫 inbox" />
+        </el-form-item>
+        <el-form-item label="任务类型">
+          <el-select v-model="newScheduleTask.kind" style="width: 100%">
+            <el-option label="扫描 inbox（统计待入库文件）" value="inbox_scan" />
+            <el-option label="自动补齐 dangling 占位页（不调 LLM）" value="orphan_auto_fill" />
+            <el-option label="刷新孤页索引区块" value="orphan_index_refresh" />
+            <el-option label="wiki lint 体检" value="wiki_lint" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="调度方式">
+          <el-radio-group v-model="newScheduleTask.scheduleType">
+            <el-radio label="cron">cron 表达式</el-radio>
+            <el-radio label="interval">间隔分钟</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="newScheduleTask.scheduleType === 'cron'" label="cron">
+          <el-input v-model="newScheduleTask.cron" placeholder="例如：0 2 * * *（每天 02:00）" />
+          <span class="maintenance-stats" style="margin-top:4px;display:block">
+            5 段：分 时 日 月 周；时区 Asia/Shanghai
+          </span>
+        </el-form-item>
+        <el-form-item v-else label="间隔">
+          <el-input-number v-model="newScheduleTask.interval" :min="1" :max="1440" />
+          <span style="margin-left:6px">分钟</span>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="newScheduleTaskDialog = false">取消</el-button>
+        <el-button type="primary" :loading="scheduleSubmitting" @click="submitScheduleTask">创建</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 知识维护：孤立实体 + Schema 合成（P3） -->
+    <el-drawer v-model="maintenanceDrawer" size="48%" title="知识维护">
+      <el-tabs v-model="maintenanceTab">
+        <el-tab-pane label="孤立实体 / 孤立页面" name="orphans">
+          <div class="maintenance-actions">
+            <el-button :loading="orphansLoading" @click="scanOrphans">扫描</el-button>
+            <el-button type="primary" :disabled="!orphansResult.dangling?.length" :loading="orphansFilling" @click="autoFillOrphans">
+              自动补齐占位页（{{ orphansResult.dangling?.length || 0 }}）
+            </el-button>
+            <el-button @click="refreshOrphansIndex">把孤页写入索引</el-button>
+          </div>
+          <div v-if="orphansResult.stats" class="maintenance-stats">
+            共 {{ orphansResult.stats.total_pages }} 页 · {{ orphansResult.stats.total_links }} 链接 · 孤立实体 {{ orphansResult.stats.dangling_count }} · 孤页 {{ orphansResult.stats.orphan_count }}
+          </div>
+          <h4>未找到目标的链接（dangling）</h4>
+          <el-empty v-if="!orphansResult.dangling?.length" description="无 dangling 链接" />
+          <ul v-else class="maintenance-list">
+            <li v-for="(d, i) in orphansResult.dangling" :key="`d${i}`">
+              <code>[[{{ d.target_slug }}]]</code> ← 来自 <code>{{ d.source }}</code>
+            </li>
+          </ul>
+          <h4>没有反向链接的孤页</h4>
+          <el-empty v-if="!orphansResult.orphans?.length" description="无孤页" />
+          <ul v-else class="maintenance-list">
+            <li v-for="(o, i) in orphansResult.orphans" :key="`o${i}`">
+              <code>{{ o.slug }}</code> ({{ o.type }}) — {{ o.title }}
+            </li>
+          </ul>
+        </el-tab-pane>
+        <el-tab-pane label="连接状态" name="connection">
+          <div class="conn-status-grid">
+            <div class="conn-status-card" :class="connStatus.local.ok ? 'ok' : 'fail'">
+              <div class="conn-status-title">本机 agent</div>
+              <div class="conn-status-state">{{ connStatus.local.ok ? '✓ 已连接' : '✗ 未连接' }}</div>
+              <div class="conn-status-meta" v-if="connStatus.local.ok">
+                绑定用户：{{ connStatus.local.bound_user || '(legacy 模式)' }}
+              </div>
+              <div class="conn-status-meta" v-else>
+                提示：先运行 <code>python app.py</code>，并 <code>python -m scripts.bind_user bind &lt;name&gt;</code>
+              </div>
+            </div>
+            <div class="conn-status-card" :class="connStatus.cloud.ok ? 'ok' : 'fail'">
+              <div class="conn-status-title">云端控制面</div>
+              <div class="conn-status-state">{{ connStatus.cloud.ok ? '✓ 已连接' : (SPLIT_MODE_ENABLED ? '✗ 未连接' : '— 单体模式') }}</div>
+              <div class="conn-status-meta" v-if="connStatus.cloud.ok">
+                Schema 合成 LLM：{{ connStatus.cloud.llm_configured ? '已配置' : 'mock 模式' }}
+              </div>
+              <div class="conn-status-meta" v-else-if="!SPLIT_MODE_ENABLED">
+                未启用云本机分离；如需启用请配置 <code>VITE_CLOUD_API</code>
+              </div>
+            </div>
+          </div>
+          <el-button @click="probeConnections" :loading="connProbing">重新探测</el-button>
+        </el-tab-pane>
+
+        <el-tab-pane v-if="currentRole === 'admin' &amp;&amp; SPLIT_MODE_ENABLED" label="用户与心跳（admin）" name="admin">
+          <div class="maintenance-actions">
+            <el-button @click="loadAdminUsers" :loading="adminUsersLoading">刷新用户列表</el-button>
+            <span class="maintenance-stats" v-if="adminUsers.length">
+              共 {{ adminUsers.length }} 个云端用户
+            </span>
+          </div>
+          <el-empty v-if="!adminUsers.length" description="无数据；点刷新加载" />
+          <ul v-else class="maintenance-list maintenance-list-detailed">
+            <li v-for="u in adminUsers" :key="u.username">
+              <div>
+                <strong>{{ u.username }}</strong>
+                <el-tag size="small" :type="u.role === 'admin' ? 'warning' : 'info'">{{ u.role }}</el-tag>
+                <code v-if="u.template_key">{{ u.template_key }}{{ u.has_custom_schema ? '*' : '' }}</code>
+                <span v-if="u.unit">· {{ u.unit }} {{ u.title }}</span>
+              </div>
+              <div class="maintenance-task-meta">
+                注册：{{ u.created_at || '?' }}
+                <span v-if="u.last_heartbeat_at">· 心跳：{{ u.last_heartbeat_at }} · agent {{ u.agent_version }}</span>
+                <span v-else class="status-err">· 从未上报心跳</span>
+              </div>
+              <div v-if="u.last_heartbeat_at" class="maintenance-task-meta">
+                wiki 页：{{ u.pages_total || 0 }} · 入库：{{ u.last_ingest_at || '从未' }} · 定时任务：{{ u.scheduled_tasks_active || 0 }}
+                <span v-if="u.schema_key_runtime &amp;&amp; u.schema_key_runtime !== u.template_key" class="status-err">
+                  · runtime schema 不一致：{{ u.schema_key_runtime }}
+                </span>
+              </div>
+            </li>
+          </ul>
+        </el-tab-pane>
+
+        <el-tab-pane label="定时任务" name="schedule">
+          <div class="maintenance-actions">
+            <el-button @click="loadScheduleTasks">刷新</el-button>
+            <el-button type="primary" @click="newScheduleTaskDialog = true">新建任务</el-button>
+          </div>
+          <el-empty v-if="!scheduleTasks.length" description="无定时任务" />
+          <ul v-else class="maintenance-list maintenance-list-detailed">
+            <li v-for="t in scheduleTasks" :key="t.id">
+              <div>
+                <strong>{{ t.name }}</strong>
+                <code>{{ t.kind }}</code>
+                <span v-if="t.schedule.type === 'cron'">cron: <code>{{ t.schedule.value }}</code></span>
+                <span v-else>每 {{ t.schedule.value }} 分钟</span>
+                <el-tag :type="t.enabled ? 'success' : 'info'">{{ t.enabled ? '启用' : '停用' }}</el-tag>
+              </div>
+              <div class="maintenance-task-meta">
+                上次运行：{{ t.last_run_at || '从未' }}
+                <span v-if="t.last_status === 'ok'" class="status-ok">✓</span>
+                <span v-else-if="t.last_status === 'error'" class="status-err">✗ {{ t.last_error }}</span>
+              </div>
+              <div class="maintenance-task-actions">
+                <el-button size="small" @click="runScheduleNow(t.id)">立即执行</el-button>
+                <el-button size="small" @click="toggleScheduleEnabled(t)">
+                  {{ t.enabled ? '停用' : '启用' }}
+                </el-button>
+                <el-button size="small" type="danger" @click="deleteScheduleTask(t.id)">删除</el-button>
+              </div>
+            </li>
+          </ul>
+        </el-tab-pane>
+
+        <el-tab-pane label="源文档预览" name="preview">
+          <div class="maintenance-actions">
+            <el-input v-model="previewForm.path" placeholder="raw 内的相对路径（例如 sources/2024-Q1.pdf）" size="default" style="flex:1" />
+            <el-button @click="loadPreviewInfo">查看元信息</el-button>
+            <el-button type="primary" @click="loadPreviewText">解析文本</el-button>
+            <el-button @click="openPreviewRaw" :disabled="!previewForm.path">浏览器打开（PDF/图片）</el-button>
+          </div>
+          <div v-if="previewResult.info" class="maintenance-stats">
+            <div>{{ previewResult.info.path }} · {{ previewResult.info.file_type }} · {{ formatBytes(previewResult.info.size) }}</div>
+          </div>
+          <pre v-if="previewResult.text" class="synth-yaml">{{ previewResult.text }}</pre>
+          <div v-if="previewResult.truncated" class="maintenance-stats">⚠ 仅显示前 50000 字</div>
+        </el-tab-pane>
+
+        <el-tab-pane label="Schema 合成" name="synth">
+          <div class="synth-form">
+            <el-input v-model="synthForm.goal" placeholder="管理目标，例如：管理我的读书笔记" size="large" />
+            <el-input v-model="synthForm.objectsRaw" placeholder="主要对象（用逗号或换行分隔），例如：书,作者,概念,金句" type="textarea" :rows="3" />
+            <el-button type="primary" :loading="synthLoading" @click="runSchemaSynth">生成预览</el-button>
+          </div>
+          <div v-if="synthResult.schema">
+            <div class="synth-result-meta">
+              来源：<el-tag :type="synthResult.source === 'llm' ? 'success' : 'warning'">{{ synthResult.source }}</el-tag>
+              · key: <code>{{ synthResult.schema.key }}</code> · 标签：{{ synthResult.schema.label }}
+            </div>
+            <h4>派生的知识卡片分类</h4>
+            <ul class="maintenance-list">
+              <li v-for="c in synthResult.derived_categories" :key="c.key">
+                <code>{{ c.key }}</code> — {{ c.label }}
+              </li>
+            </ul>
+            <pre class="synth-yaml">{{ synthYamlPreview }}</pre>
+            <el-button type="primary" :loading="synthApplying" @click="applySchemaCustom">应用为我的 Schema（重启 agent 后生效）</el-button>
+            <el-button @click="clearCustomSchema">清除 custom，回退模板</el-button>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
+    </el-drawer>
   </div>
 </template>
 
@@ -1483,12 +1702,19 @@ import {
   RefreshLeft,
   Search,
   Setting,
+  Tools,
   UploadFilled,
   View,
 } from '@element-plus/icons-vue'
 import { GRAPH_LAYOUTS, layoutTargets } from './graphLayouts'
 import { sortKnowledgePages } from './pageSorting'
 import { normalizeKnowledgeSources } from './chatSources'
+import {
+  apiFetch,
+  SPLIT_MODE_ENABLED,
+  persistTokensFromResponse,
+  clearTokens,
+} from './apiClient'
 
 const navItems = [
   { key: 'home', label: '首页', icon: HomeFilled },
@@ -1528,7 +1754,11 @@ const registerForm = ref({
   unit: '',
   title: '',
   email: '',
+  template_key: '',  // P2 起：注册必选模板
 })
+// 云端可选 schema 模板列表（P2-A）。仅在分离模式下加载；单体模式下为空数组，不显示选择卡片。
+const schemaTemplates = ref([])
+const setupTemplateKey = ref('police')  // setup（首位 admin）默认警务模板
 const loginRemember = ref(true)
 const changePasswordDialog = ref(false)
 const changePasswordForm = ref({ old: '', new: '', confirm: '' })
@@ -1925,12 +2155,17 @@ const graphAdjacencyMap = computed(() => {
 })
 
 async function api(path, options = {}) {
-  const response = await fetch(path, { credentials: 'same-origin', ...options })
+  // 单体模式 → same-origin fetch；分离模式 → 走 apiClient（双 baseURL + JWT）
+  // 行为对调用方透明，路径仍用 /api/auth/、/api/admin/invites 这类逻辑名
+  const response = await apiFetch(path, options)
   const data = await response.json().catch(() => ({}))
-  if (response.status === 401 && !path.startsWith('/api/auth/')) {
-    // session 失效或未登录,踢回登录页
+  // 登录/注册响应里有 access_token / refresh_token 时自动落盘
+  persistTokensFromResponse(data)
+  if (response.status === 401 && !path.startsWith('/api/auth/') && !path.startsWith('/api/cloud/auth/')) {
+    // session/JWT 失效，踢回登录页
     authState.value = 'login'
     currentUser.value = null
+    if (SPLIT_MODE_ENABLED) clearTokens()
     throw new Error(data.error || '请先登录')
   }
   if (!response.ok) {
@@ -1939,10 +2174,30 @@ async function api(path, options = {}) {
   return data
 }
 
+// === Schema 模板（P2-A）===
+async function loadSchemaTemplates() {
+  if (!SPLIT_MODE_ENABLED) {
+    schemaTemplates.value = []
+    return
+  }
+  try {
+    const res = await api('/api/cloud/schema/templates')
+    schemaTemplates.value = Array.isArray(res?.templates) ? res.templates : []
+    if (!registerForm.value.template_key && schemaTemplates.value.length) {
+      registerForm.value.template_key = schemaTemplates.value[0].key
+    }
+  } catch (err) {
+    // 拉取失败不阻塞注册：单体模式下也走这条路（只是 picker 不显示）
+    schemaTemplates.value = []
+  }
+}
+
 // === 鉴权流程 ===
 async function checkAuth() {
   try {
     const status = await api('/api/auth/status')
+    // 异步加载模板，不阻塞 status 判断
+    loadSchemaTemplates()
     if (!status.has_user) {
       authState.value = 'setup'
     } else if (!status.logged_in) {
@@ -1984,7 +2239,12 @@ async function submitSetup() {
     await api('/api/auth/setup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: f.username.trim(), password: f.password }),
+      body: JSON.stringify({
+        username: f.username.trim(),
+        password: f.password,
+        // 单体模式下后端会忽略；分离模式下首位 admin 也存一个 template_key
+        template_key: setupTemplateKey.value || 'police',
+      }),
     })
     // 同时写 raw_dir 配置
     const raw_dir = f.raw_mode === 'custom' ? (f.raw_dir || '').trim() : ''
@@ -2061,6 +2321,11 @@ async function submitRegister() {
     ElMessage.warning('请填写职务')
     return
   }
+  // 分离模式（云端在线）下，模板必选；单体模式不需要 template_key
+  if (SPLIT_MODE_ENABLED && schemaTemplates.value.length && !f.template_key) {
+    ElMessage.warning('请选择一个 Schema 模板')
+    return
+  }
   authSubmitting.value = true
   try {
     const res = await api('/api/auth/register', {
@@ -2073,6 +2338,7 @@ async function submitRegister() {
         unit: f.unit.trim(),
         title: f.title.trim(),
         email: f.email.trim(),
+        template_key: f.template_key || '',
       }),
     })
     ElMessage.success('注册成功，已自动登录')
@@ -2112,6 +2378,8 @@ async function logoutUser() {
   } catch {
     /* ignore */
   }
+  // 分离模式下清掉本地 token，单体模式下是 no-op
+  clearTokens()
   currentUser.value = null
   userMenuVisible.value = false
   authState.value = 'login'
@@ -3776,4 +4044,253 @@ onBeforeUnmount(() => {
   stopBatchPolling()
   stopAgentStatusPolling()
 })
+
+// === 知识维护抽屉（P3：孤立实体 + Schema 合成） ===
+const maintenanceDrawer = ref(false)
+const maintenanceTab = ref('orphans')
+const orphansLoading = ref(false)
+const orphansFilling = ref(false)
+const orphansResult = ref({})
+const synthForm = ref({ goal: '', objectsRaw: '' })
+const synthLoading = ref(false)
+const synthApplying = ref(false)
+const synthResult = ref({})
+
+const synthYamlPreview = computed(() => {
+  if (!synthResult.value.schema) return ''
+  try { return JSON.stringify(synthResult.value.schema, null, 2) } catch { return '' }
+})
+
+function openMaintenance() { maintenanceDrawer.value = true }
+window.__mjq_open_maintenance = openMaintenance  // 临时入口（P3 没接菜单时用 console 也能打开）
+
+async function scanOrphans() {
+  orphansLoading.value = true
+  try {
+    orphansResult.value = await api('/api/orphans/scan')
+  } catch (e) { ElMessage.error(e.message) }
+  finally { orphansLoading.value = false }
+}
+
+async function autoFillOrphans() {
+  await ElMessageBox.confirm(
+    `将为 ${orphansResult.value.dangling?.length || 0} 个 dangling 链接生成占位页。LLM 调用可能产生费用。`,
+    '确认',
+    { confirmButtonText: '继续', cancelButtonText: '取消' },
+  ).catch(() => null)
+  if (!maintenanceDrawer.value) return
+  orphansFilling.value = true
+  try {
+    const res = await api('/api/orphans/dangling/auto-fill', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ use_llm: true }),
+    })
+    ElMessage.success(`已建占位页 ${res.created.length} 个，跳过 ${res.skipped.length} 个`)
+    await scanOrphans()
+  } catch (e) { ElMessage.error(e.message) }
+  finally { orphansFilling.value = false }
+}
+
+async function refreshOrphansIndex() {
+  try {
+    const res = await api('/api/orphans/index/refresh', { method: 'POST' })
+    ElMessage.success(`已写入索引（孤页 ${res.orphan_count} 个）`)
+  } catch (e) { ElMessage.error(e.message) }
+}
+
+async function runSchemaSynth() {
+  if (!SPLIT_MODE_ENABLED) {
+    ElMessage.warning('Schema 合成仅在云本机分离模式下可用')
+    return
+  }
+  const goal = synthForm.value.goal.trim()
+  const objects = synthForm.value.objectsRaw
+    .split(/[,，\n]/).map(s => s.trim()).filter(Boolean)
+  if (!goal) { ElMessage.warning('请填写管理目标'); return }
+  if (!objects.length) { ElMessage.warning('请至少给一个对象'); return }
+  synthLoading.value = true
+  try {
+    synthResult.value = await api('/api/cloud/schema/synthesize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ goal, objects }),
+    })
+  } catch (e) { ElMessage.error(e.message) }
+  finally { synthLoading.value = false }
+}
+
+async function applySchemaCustom() {
+  if (!synthResult.value.schema) return
+  await ElMessageBox.confirm(
+    '应用后会替换你的 schema.yaml；现有 wiki 内容不会被删除，但目录结构可能不再匹配，请重启本机 agent。',
+    '确认应用',
+    { confirmButtonText: '应用', cancelButtonText: '取消' },
+  ).catch(() => null)
+  synthApplying.value = true
+  try {
+    await api('/api/cloud/schema/apply-custom', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ schema: synthResult.value.schema }),
+    })
+    ElMessage.success('已应用 custom schema，重启本机 agent 后生效')
+  } catch (e) { ElMessage.error(e.message) }
+  finally { synthApplying.value = false }
+}
+
+async function clearCustomSchema() {
+  try {
+    await api('/api/cloud/schema/clear-custom', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    ElMessage.success('已清除 custom schema，重启本机 agent 后回退到模板')
+  } catch (e) { ElMessage.error(e.message) }
+}
+
+// === 连接状态探测（P5） ===
+const connStatus = ref({
+  local: { ok: false, bound_user: null, legacy_mode: false },
+  cloud: { ok: false, llm_configured: false },
+})
+const connProbing = ref(false)
+
+async function probeConnections() {
+  connProbing.value = true
+  try {
+    try {
+      const data = await api('/api/health')
+      connStatus.value.local = { ok: true, bound_user: data.bound_user, legacy_mode: data.legacy_mode }
+    } catch { connStatus.value.local = { ok: false } }
+    if (SPLIT_MODE_ENABLED) {
+      try {
+        const data = await api('/api/cloud/health')
+        connStatus.value.cloud = { ok: true, llm_configured: !!data?.schema_synth?.llm_configured }
+      } catch { connStatus.value.cloud = { ok: false } }
+    } else {
+      connStatus.value.cloud = { ok: false, llm_configured: false }
+    }
+  } finally { connProbing.value = false }
+}
+
+// admin 用户与心跳
+const adminUsers = ref([])
+const adminUsersLoading = ref(false)
+async function loadAdminUsers() {
+  adminUsersLoading.value = true
+  try {
+    const res = await api('/api/cloud/admin/users')
+    adminUsers.value = res.users || []
+  } catch (e) { ElMessage.error(e.message) }
+  finally { adminUsersLoading.value = false }
+}
+
+// 维护抽屉打开时自动探测连接、加载 admin 数据
+watch(maintenanceDrawer, (v) => {
+  if (v) probeConnections()
+})
+
+// === 定时任务（P4） ===
+const scheduleTasks = ref([])
+const newScheduleTaskDialog = ref(false)
+const newScheduleTask = ref({ name: '', kind: 'inbox_scan', scheduleType: 'cron', cron: '0 2 * * *', interval: 60 })
+const scheduleSubmitting = ref(false)
+
+async function loadScheduleTasks() {
+  try {
+    const res = await api('/api/schedule/tasks')
+    scheduleTasks.value = res.tasks || []
+  } catch (e) { ElMessage.error(e.message) }
+}
+
+async function submitScheduleTask() {
+  const f = newScheduleTask.value
+  const schedule = f.scheduleType === 'cron'
+    ? { type: 'cron', value: f.cron.trim() }
+    : { type: 'interval', value: Number(f.interval) }
+  scheduleSubmitting.value = true
+  try {
+    await api('/api/schedule/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: f.name.trim() || f.kind, kind: f.kind, schedule, enabled: true }),
+    })
+    ElMessage.success('已创建')
+    newScheduleTaskDialog.value = false
+    await loadScheduleTasks()
+  } catch (e) { ElMessage.error(e.message) }
+  finally { scheduleSubmitting.value = false }
+}
+
+async function runScheduleNow(id) {
+  try {
+    await api(`/api/schedule/tasks/${id}/run-now`, { method: 'POST' })
+    ElMessage.success('已触发；查看 last_status 看结果')
+    await loadScheduleTasks()
+  } catch (e) { ElMessage.error(e.message) }
+}
+
+async function toggleScheduleEnabled(t) {
+  try {
+    await api(`/api/schedule/tasks/${t.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: !t.enabled }),
+    })
+    await loadScheduleTasks()
+  } catch (e) { ElMessage.error(e.message) }
+}
+
+async function deleteScheduleTask(id) {
+  await ElMessageBox.confirm('删除任务？', '确认', { type: 'warning' }).catch(() => null)
+  if (!maintenanceDrawer.value) return
+  try {
+    await api(`/api/schedule/tasks/${id}`, { method: 'DELETE' })
+    await loadScheduleTasks()
+  } catch (e) { ElMessage.error(e.message) }
+}
+
+watch(maintenanceTab, (tab) => {
+  if (tab === 'schedule' && !scheduleTasks.value.length) loadScheduleTasks()
+  if (tab === 'admin' && currentRole.value === 'admin' && SPLIT_MODE_ENABLED && !adminUsers.value.length) loadAdminUsers()
+})
+
+// === 源文档预览（P4） ===
+const previewForm = ref({ path: '' })
+const previewResult = ref({})
+
+function formatBytes(n) {
+  if (!n) return '0 B'
+  if (n < 1024) return n + ' B'
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
+  return (n / 1024 / 1024).toFixed(1) + ' MB'
+}
+
+async function loadPreviewInfo() {
+  if (!previewForm.value.path.trim()) return
+  try {
+    const data = await api(`/api/source/preview?path=${encodeURIComponent(previewForm.value.path.trim())}&format=info`)
+    previewResult.value = { info: data, text: '' }
+  } catch (e) { ElMessage.error(e.message) }
+}
+
+async function loadPreviewText() {
+  if (!previewForm.value.path.trim()) return
+  try {
+    const data = await api(`/api/source/preview?path=${encodeURIComponent(previewForm.value.path.trim())}&format=text`)
+    previewResult.value = { info: { path: data.path, file_type: data.file_type, size: data.size }, text: data.text || '', truncated: data.truncated }
+  } catch (e) { ElMessage.error(e.message) }
+}
+
+function openPreviewRaw() {
+  const p = previewForm.value.path.trim()
+  if (!p) return
+  // 单体模式：相对路径直接走 same-origin；分离模式：拼本机 baseURL
+  const base = (import.meta.env.VITE_LOCAL_API || '').replace(/\/+$/, '')
+  // 注意：分离模式下浏览器直接打开新标签会缺 Bearer token；
+  // 这里仅在单体模式下推荐使用。生产可改为先拿一次性下载 token。
+  window.open(`${base}/api/source/raw?path=${encodeURIComponent(p)}`, '_blank')
+}
 </script>
