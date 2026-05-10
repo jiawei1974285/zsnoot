@@ -34,7 +34,7 @@ from mjq_logging import get_logger
 
 logger = get_logger(__name__)
 
-AGENT_VERSION = "0.5.0"          # 跟随项目阶段；P5 = 0.5.0
+AGENT_VERSION = "1.0.0"          # web 版 V1.0 —— P1-P5 全阶段完成的首个发布
 HEARTBEAT_INTERVAL_SEC = 300     # 5 min
 
 
