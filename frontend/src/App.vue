@@ -244,8 +244,8 @@
               <el-icon><User /></el-icon>
             </div>
             <div>
-              <strong>{{ currentUser || '张警官' }}</strong>
-              <span>XX公安局 刑侦支队</span>
+              <strong>{{ currentUser || '未登录' }}</strong>
+              <span>{{ currentAffiliation || '未填写单位 / 职务' }}</span>
             </div>
           </div>
           <button class="logout-button" @click="logoutUser">
@@ -1865,6 +1865,14 @@ const authState = ref('loading')          // 'loading' | 'setup' | 'login' | 'au
 const authMode = ref('login')             // 仅 authState='login' 时生效：'login' | 'register'
 const currentUser = ref(null)
 const currentRole = ref(null)             // 'admin' | 'member' | null
+// 用户档案（unit/title/email）—— 登录后由 /api/cloud/auth/status 或 /login 接口写入
+const currentProfile = ref({ unit: '', title: '', email: '', template_key: '' })
+const currentAffiliation = computed(() => {
+  const u = currentProfile.value.unit?.trim() || ''
+  const t = currentProfile.value.title?.trim() || ''
+  if (u && t) return `${u} ${t}`
+  return u || t || ''
+})
 const authSubmitting = ref(false)
 const setupForm = ref({ username: '', password: '', password_confirm: '', raw_mode: 'default', raw_dir: '' })
 const loginForm = ref({ username: '', password: '' })
@@ -2568,6 +2576,12 @@ async function checkAuth() {
     } else {
       currentUser.value = status.username
       currentRole.value = status.role || null
+      currentProfile.value = {
+        unit: status.unit || '',
+        title: status.title || '',
+        email: status.email || '',
+        template_key: status.template_key || '',
+      }
       authState.value = 'authed'
       // 进入主应用,加载初始数据
       await loadSchemaCategories()
@@ -2618,6 +2632,10 @@ async function submitSetup() {
     })
     ElMessage.success('初始化完成')
     currentUser.value = f.username.trim()
+    currentProfile.value = {
+      unit: '', title: '', email: '',
+      template_key: setupTemplateKey.value || '',
+    }
     authState.value = 'authed'
     await loadSchemaCategories()
     await refreshAll()
@@ -2646,6 +2664,12 @@ async function submitLogin() {
     })
     currentUser.value = res.username
     currentRole.value = res.role || null
+    currentProfile.value = {
+      unit: res.unit || '',
+      title: res.title || '',
+      email: res.email || '',
+      template_key: res.template_key || '',
+    }
     authState.value = 'authed'
     loginForm.value.password = ''
     await loadSchemaCategories()
@@ -2709,6 +2733,12 @@ async function submitRegister() {
     ElMessage.success('注册成功，已自动登录')
     currentUser.value = res.username
     currentRole.value = res.role || null
+    currentProfile.value = {
+      unit: res.unit || '',
+      title: res.title || '',
+      email: res.email || '',
+      template_key: res.template_key || '',
+    }
     authState.value = 'authed'
     // 清掉密码字段，留下其他便于参考
     registerForm.value.password = ''

@@ -123,11 +123,21 @@ def create_app() -> Flask:
         token = _bearer_token()
         username = None
         role = None
+        profile = {}
         if token:
             try:
                 claims = jwt_utils.verify_token(secret, token, expected_typ="access")
                 username = claims.get("sub")
                 role = claims.get("role")
+                # 拿用户的 unit/title/email/template_key 给前端展示
+                user = auth_lib.get_user(CLOUD_DIR, username) if username else None
+                if user:
+                    profile = {
+                        "unit": user.get("unit", ""),
+                        "title": user.get("title", ""),
+                        "email": user.get("email", ""),
+                        "template_key": user.get("template_key", ""),
+                    }
             except jwt_utils.InvalidTokenError:
                 pass
         return jsonify({
@@ -135,6 +145,7 @@ def create_app() -> Flask:
             "logged_in": bool(username),
             "username": username,
             "role": role,
+            **profile,
         })
 
     @app.route("/api/cloud/auth/setup", methods=["POST"])
@@ -164,6 +175,9 @@ def create_app() -> Flask:
         return jsonify({
             "username": user["username"],
             "role": user.get("role"),
+            "unit": user.get("unit", ""),
+            "title": user.get("title", ""),
+            "email": user.get("email", ""),
             "template_key": template_key,
             "access_token": access,
             "refresh_token": refresh,
@@ -197,6 +211,9 @@ def create_app() -> Flask:
         return jsonify({
             "username": user["username"],
             "role": user.get("role"),
+            "unit": user.get("unit", ""),
+            "title": user.get("title", ""),
+            "email": user.get("email", ""),
             "template_key": template_key,
             "access_token": access,
             "refresh_token": refresh,
@@ -215,6 +232,9 @@ def create_app() -> Flask:
         return jsonify({
             "username": user["username"],
             "role": user.get("role"),
+            "unit": user.get("unit", ""),
+            "title": user.get("title", ""),
+            "email": user.get("email", ""),
             "template_key": user.get("template_key", ""),
             "access_token": access,
             "refresh_token": refresh,

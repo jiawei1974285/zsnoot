@@ -101,13 +101,6 @@ case_refs:
 
 ## 自定义页面类型
 
-| 类型 | 目录 | 用途 |
-|------|------|------|
-| type | wiki/type/ | 违法犯罪类型 |
-| organization | wiki/organization/ | 组织机构 |
-
-自定义类型由系统配置生成。LLM 入库时可根据材料语义选择这些类型，并将页面写入对应目录。
-
-Frontmatter `type` 允许使用以上自定义类型。
+暂无自定义页面类型。
 
 <!-- CUSTOM_CATEGORIES_END -->
