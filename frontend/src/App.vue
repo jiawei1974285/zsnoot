@@ -2381,8 +2381,22 @@ const currentPageIndeterminate = computed(() => {
   const some = pagedPages.value.some((p) => selectedPageKeys.value.includes(pageKey(p)))
   return some && !currentPageAllSelected.value
 })
+// P2-A 起：分类列表来自 schema_runtime（/api/wiki/categories）。
+// schemaCategories 在 checkAuth 后由 loadSchemaCategories() 拉取；失败则保留警务默认作 fallback。
+const schemaCategories = ref([])
+async function loadSchemaCategories() {
+  try {
+    const data = await api('/api/wiki/categories')
+    if (Array.isArray(data) && data.length) {
+      schemaCategories.value = data
+    }
+  } catch {
+    schemaCategories.value = []  // 保持空 → fallback 默认
+  }
+}
 const categoryOptions = computed(() => {
-  const defaults = [
+  const fromSchema = schemaCategories.value
+  const defaults = fromSchema.length ? fromSchema : [
     { key: 'cases', label: '案件' },
     { key: 'persons', label: '人员' },
     { key: 'locations', label: '地点' },
@@ -2556,6 +2570,7 @@ async function checkAuth() {
       currentRole.value = status.role || null
       authState.value = 'authed'
       // 进入主应用,加载初始数据
+      await loadSchemaCategories()
       await refreshAll()
       await loadHome()
       startBatchPolling()
@@ -2604,6 +2619,7 @@ async function submitSetup() {
     ElMessage.success('初始化完成')
     currentUser.value = f.username.trim()
     authState.value = 'authed'
+    await loadSchemaCategories()
     await refreshAll()
     await loadHome()
     startBatchPolling()
@@ -2632,6 +2648,7 @@ async function submitLogin() {
     currentRole.value = res.role || null
     authState.value = 'authed'
     loginForm.value.password = ''
+    await loadSchemaCategories()
     await refreshAll()
     await loadHome()
     startBatchPolling()
@@ -2697,6 +2714,7 @@ async function submitRegister() {
     registerForm.value.password = ''
     registerForm.value.password_confirm = ''
     registerForm.value.invite_code = ''
+    await loadSchemaCategories()
     await refreshAll()
     await loadHome()
     startBatchPolling()
@@ -3517,6 +3535,7 @@ async function uploadFiles() {
     fileList.value = []
     uploadFilesExpanded.value = false
     ElMessage.success('入库完成')
+    await loadSchemaCategories()
     await refreshAll()
     await openBatch(result.id)
   } catch (error) {
@@ -3857,6 +3876,7 @@ async function rollbackBatch(batch) {
   const result = await api(`/api/ingest/batches/${batch.id}/rollback`, { method: 'POST' })
   ElMessage.success('已回滚')
   selectedBatch.value = result
+  await loadSchemaCategories()
   await refreshAll()
 }
 
