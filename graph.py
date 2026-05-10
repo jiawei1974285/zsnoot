@@ -241,10 +241,22 @@ def run_lint(stale_after_days: int = 180) -> Dict:
 
     cutoff = date.today() - timedelta(days=stale_after_days)
     stale_pages = []
+    placeholder_pages = []
     for page in pages:
-        if page["meta"].get("standalone"):
+        meta = page["meta"]
+        # 占位页（orphan_detector 自动建的、frontmatter 含 placeholder: true）
+        if meta.get("placeholder"):
+            placeholder_pages.append({
+                "slug": page["slug"],
+                "type": page["type"],
+                "title": page["title"],
+                "tags": meta.get("tags", []),
+            })
+            # 占位页本身不算 stale（即便长时间没更新），它是已知"待补"
             continue
-        updated = _coerce_date(page["meta"].get("updated") or page["meta"].get("created"))
+        if meta.get("standalone"):
+            continue
+        updated = _coerce_date(meta.get("updated") or meta.get("created"))
         if updated and updated < cutoff:
             stale_pages.append({
                 "slug": page["slug"],
@@ -255,24 +267,42 @@ def run_lint(stale_after_days: int = 180) -> Dict:
 
     suggestions = []
     if broken_links:
-        suggestions.append(f"发现 {len(broken_links)} 条断链，可删除链接或创建占位页。")
+        suggestions.append(f"发现 {len(broken_links)} 条断链（指向不存在的页），可删除链接或一键建占位页。")
     if orphan_pages:
-        suggestions.append(f"发现 {len(orphan_pages)} 个孤立页面，可补充关联或标记独立。")
+        suggestions.append(f"发现 {len(orphan_pages)} 个孤立页面（无人引用、自身也无外联），可补充关联或标记独立。")
     if stale_pages:
-        suggestions.append(f"发现 {len(stale_pages)} 个长期未更新页面，可确认或刷新。")
+        suggestions.append(f"发现 {len(stale_pages)} 个长期未更新页面（>{stale_after_days} 天），可确认或刷新。")
+    if placeholder_pages:
+        suggestions.append(f"发现 {len(placeholder_pages)} 个占位页（自动生成、待补充），可一键 LLM 补全或确认存档。")
     if not suggestions:
         suggestions.append("知识库体检通过，暂未发现需要处理的问题。")
+
+    # 健康度公式：100 - 各类问题的加权扣分
+    # 权重：断链 3 / 孤立 1 / 过期 0.5 / 占位 1.5；除以总页数（最少 1）
+    total_pages = max(len(page_by_slug), 1)
+    weighted = (
+        len(broken_links) * 3
+        + len(orphan_pages) * 1
+        + len(stale_pages) * 0.5
+        + len(placeholder_pages) * 1.5
+    )
+    health_score = max(0, min(100, round(100 - weighted * 100 / total_pages)))
 
     return {
         "broken_links": broken_links,
         "orphan_pages": orphan_pages,
         "stale_pages": stale_pages,
+        "placeholder_pages": placeholder_pages,
         "suggestions": suggestions,
+        "health_score": health_score,
         "summary": {
             "pages": len(page_by_slug),
             "broken_links": len(broken_links),
             "orphan_pages": len(orphan_pages),
             "stale_pages": len(stale_pages),
+            "placeholder_pages": len(placeholder_pages),
+            "health_score": health_score,
+            "formula": "100 - (断链*3 + 孤立*1 + 过期*0.5 + 占位*1.5) * 100 / 总页数",
         },
     }
 

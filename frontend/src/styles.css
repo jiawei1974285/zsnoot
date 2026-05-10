@@ -4357,3 +4357,88 @@ body {
   .home-body-grid { grid-template-columns: 1fr; }
   .home-right-col { position: static; }
 }
+
+/* === A 整改：体检页 4 类问题概览卡片 === */
+.lint-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin: 16px 0 20px;
+}
+.lint-overview-card {
+  background: #f7f9fc;
+  border: 1px solid #e3e8ee;
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.lint-overview-card.active {
+  background: #fff8f0;
+  border-color: #f3c896;
+}
+.lint-overview-label {
+  font-size: 12px;
+  color: var(--text-muted, #6b7785);
+}
+.lint-overview-num {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-main, #17324d);
+}
+.lint-overview-card.active .lint-overview-num { color: #d57430; }
+.lint-overview-desc {
+  font-size: 11px;
+  color: #97a3b1;
+  line-height: 1.4;
+  flex-grow: 1;
+}
+.lint-overview-clean {
+  font-size: 12px;
+  color: #19bf78;
+  font-weight: 500;
+}
+.lint-suggestions {
+  background: #f5f8fc;
+  border-left: 3px solid #3b82f6;
+  border-radius: 4px;
+  padding: 10px 14px;
+  margin: 16px 0;
+}
+.lint-suggestion {
+  font-size: 13px;
+  color: var(--text-main, #17324d);
+  padding: 4px 0;
+}
+.lint-formula {
+  font-size: 11px;
+  color: #97a3b1;
+  margin-left: 4px;
+}
+
+/* 首页可点击 KPI / health row */
+.home-kpi-clickable {
+  cursor: pointer;
+  border: 1px solid transparent;
+  font-family: inherit;
+  text-align: left;
+  transition: all 0.15s;
+}
+.home-kpi-clickable:hover {
+  border-color: rgba(34, 102, 221, 0.3);
+  box-shadow: 0 4px 12px rgba(34, 102, 221, 0.1);
+  transform: translateY(-1px);
+}
+.home-health-row-clickable {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  width: 100%;
+}
+.home-health-row-clickable:hover { background: rgba(0, 0, 0, 0.04); }

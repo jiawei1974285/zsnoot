@@ -2020,7 +2020,7 @@ def api_lint_fix():
     category = data.get('category')
     items = data.get('items', [])
 
-    if category not in {'broken_links', 'orphan_pages', 'stale_pages'}:
+    if category not in {'broken_links', 'orphan_pages', 'stale_pages', 'placeholder_pages'}:
         return jsonify({'error': f'未知类别: {category}'}), 400
     if not isinstance(items, list):
         return jsonify({'error': 'items 必须为数组'}), 400
@@ -2054,7 +2054,7 @@ def api_lint_fix():
                     save_wiki_page(src_slug, src['type'], meta, new_body)
                     succeeded.append({'item': item, 'removed': count})
                 elif action == 'create_stub':
-                    # 创建空白目标页（默认 notes 类型）
+                    # 创建空白占位页（默认 notes 类型，frontmatter 含 placeholder: true 便于后续追踪）
                     stub_slug = target.strip()
                     if get_wiki_page(stub_slug):
                         failed.append({'item': item, 'error': '目标页已存在'})
@@ -2062,13 +2062,31 @@ def api_lint_fix():
                     stub_meta = {
                         'type': 'notes',
                         'title': stub_slug,
-                        'tags': [],
+                        'placeholder': True,
+                        'tags': ['待补充'],
                         'related': [],
                         'created': today,
                         'updated': today,
                     }
-                    save_wiki_page(stub_slug, 'notes', stub_meta, f'# {stub_slug}\n\n（占位页面，由体检修复创建，请补充内容。）\n')
+                    save_wiki_page(stub_slug, 'notes', stub_meta, f'> 占位页面，由体检修复创建。请补充内容后删除 frontmatter 的 `placeholder` 字段。\n')
                     succeeded.append({'item': item, 'created': stub_slug})
+                elif action == 'create_stub_smart':
+                    # 智能补齐：调 LLM 给个草稿摘要 + 反向引用
+                    stub_slug = target.strip()
+                    if get_wiki_page(stub_slug):
+                        failed.append({'item': item, 'error': '目标页已存在'})
+                        continue
+                    try:
+                        from orphan_detector import create_placeholder_for_dangling
+                        rel = create_placeholder_for_dangling(
+                            PROJECT_DIR, stub_slug, [src_slug], use_llm=True,
+                        )
+                        if rel:
+                            succeeded.append({'item': item, 'created': stub_slug, 'smart': True})
+                        else:
+                            failed.append({'item': item, 'error': 'create_placeholder 返回 None'})
+                    except Exception as exc:
+                        failed.append({'item': item, 'error': f'smart stub 失败：{exc}'})
                 else:
                     failed.append({'item': item, 'error': f'broken_links 不支持动作: {action}'})
             except Exception as exc:  # noqa: BLE001
@@ -2137,7 +2155,56 @@ def api_lint_fix():
                     except Exception as exc:  # noqa: BLE001
                         failed.append({'item': item, 'error': str(exc)})
 
-    else:  # stale_pages
+    elif category == 'placeholder_pages':
+        # 占位页：① enrich = LLM 补全；② accept = 清掉 placeholder 标记，存档为正式页；③ delete
+        try:
+            from auto_ingest import enrich_wikilinks
+        except Exception:
+            enrich_wikilinks = None
+        all_pages = get_wiki_pages() if any(i.get('action') == 'enrich' for i in items) else []
+        for item in items:
+            slug = item.get('slug')
+            page_type = item.get('type')
+            action = item.get('action', 'accept')
+            try:
+                page = get_wiki_page(slug, page_type)
+                if not page:
+                    failed.append({'item': item, 'error': '页面不存在'})
+                    continue
+                meta = dict(page['meta'])
+                if action == 'enrich':
+                    if not enrich_wikilinks:
+                        failed.append({'item': item, 'error': 'enrich_wikilinks 不可用'})
+                        continue
+                    enriched = enrich_wikilinks(page['content'], all_pages)
+                    new_meta, new_body = parse_frontmatter(enriched)
+                    if not new_meta:
+                        new_meta = dict(meta)
+                        new_body = enriched
+                    new_meta.pop('placeholder', None)  # LLM 补完了，不再是占位
+                    tags = new_meta.get('tags') or []
+                    new_meta['tags'] = [t for t in tags if t != '待补充']
+                    new_meta['updated'] = today
+                    save_wiki_page(slug, page['type'], new_meta, new_body)
+                    succeeded.append({'item': item, 'enriched': True})
+                elif action == 'accept':
+                    # 用户确认它就是个有用的占位（比如「待调研」），清掉 placeholder 标记
+                    meta.pop('placeholder', None)
+                    meta['updated'] = today
+                    save_wiki_page(slug, page['type'], meta, page['body'])
+                    succeeded.append({'item': item, 'accepted': True})
+                elif action == 'delete':
+                    # 直接删掉占位页
+                    file_path = os.path.join(WIKI_DIR, page['type'], f"{slug}.md")
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                    succeeded.append({'item': item, 'deleted': True})
+                else:
+                    failed.append({'item': item, 'error': f'placeholder_pages 不支持动作: {action}'})
+            except Exception as exc:
+                failed.append({'item': item, 'error': str(exc)})
+
+    elif category == 'stale_pages':
         for item in items:
             slug = item.get('slug')
             page_type = item.get('type')

@@ -396,20 +396,20 @@
                       <line x1="0" y1="20" x2="120" y2="20" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4 4"/>
                     </svg>
                   </div>
-                  <!-- 健康度 -->
-                  <div class="home-kpi-card home-kpi-health">
+                  <!-- 健康度（点开跳到体检页） -->
+                  <button class="home-kpi-card home-kpi-health home-kpi-clickable" @click="setActiveView('lint')" :title="lint.summary?.formula || '点击查看详情'">
                     <div class="home-kpi-header">
                       <span class="home-kpi-label">知识库健康度</span>
                       <span class="home-kpi-delta up">{{ lintHealthScore }}%</span>
                     </div>
                     <div class="home-kpi-value kpi-val-health">{{ lintHealthScore }}%</div>
                     <div class="home-kpi-sub">
-                      断链 {{ lint.broken_links?.length || 0 }} · 孤立 {{ lint.orphan_pages?.length || 0 }} · 过期 {{ lint.stale_pages?.length || 0 }}
+                      断链 {{ lint.broken_links?.length || 0 }} · 孤立 {{ lint.orphan_pages?.length || 0 }} · 过期 {{ lint.stale_pages?.length || 0 }} · 占位 {{ lint.placeholder_pages?.length || 0 }}
                     </div>
                     <div class="home-health-bar-wrap">
                       <div class="home-health-bar" :style="{ width: lintHealthScore + '%' }"></div>
                     </div>
-                  </div>
+                  </button>
                 </div>
 
                 <!-- Activity Feed -->
@@ -484,13 +484,14 @@
                 <!-- 健康度详情 -->
                 <div class="home-health-card">
                   <div class="home-feed-title" style="margin-bottom:10px">知识库健康度</div>
-                  <div v-for="h in healthItems" :key="h.label" class="home-health-row">
+                  <button v-for="h in healthItems" :key="h.label" class="home-health-row home-health-row-clickable"
+                    @click="goLintCategory(h.category)" :title="`点击处理 ${h.count} 项`">
                     <span class="home-health-label">{{ h.label }}</span>
                     <div class="home-health-bar-wrap" style="flex:1">
                       <div class="home-health-bar" :style="{ width: h.val + '%', background: h.color }"></div>
                     </div>
-                    <span class="home-health-val">{{ h.val }}%</span>
-                  </div>
+                    <span class="home-health-val">{{ h.count }}</span>
+                  </button>
                   <button class="home-health-link" @click="setActiveView('lint')">前往体检 →</button>
                 </div>
               </div>
@@ -1326,30 +1327,54 @@
             <div class="section-header">
               <div>
                 <div class="section-title">知识库体检</div>
-                <div class="section-caption">检查断链、孤立页面、过期内容和需要补充的线索。</div>
+                <div class="section-caption">
+                  断链 · 孤立 · 过期 · 占位 —— 唯一的健康度入口
+                  <span v-if="lint.summary?.health_score !== undefined" class="lint-formula" :title="lint.summary?.formula">
+                    · 当前健康度 {{ lint.summary.health_score }}%
+                  </span>
+                </div>
               </div>
               <el-button type="primary" :loading="lintLoading" :icon="CircleCheck" @click="runLint">
                 开始体检
               </el-button>
             </div>
-            <div class="detail-list">
-              <div v-for="suggestion in lint.suggestions || []" :key="suggestion" class="detail-item">
-                {{ suggestion }}
+
+            <!-- 4 类问题概览（始终显示，无问题就 0） -->
+            <div class="lint-overview-grid">
+              <div class="lint-overview-card" :class="{ active: (lint.broken_links?.length || 0) > 0 }">
+                <div class="lint-overview-label">断链</div>
+                <div class="lint-overview-num">{{ lint.broken_links?.length || 0 }}</div>
+                <div class="lint-overview-desc">页面引用了不存在的实体</div>
+                <el-button v-if="(lint.broken_links?.length || 0) > 0" size="small" type="primary" @click="openLintFix('broken_links')">处理</el-button>
+                <span v-else class="lint-overview-clean">✓ 无问题</span>
               </div>
-              <div v-if="lint.broken_links?.length" class="detail-item lint-row">
-                <span>断链关联：{{ lint.broken_links.length }} 条</span>
-                <el-button size="small" type="primary" @click="openLintFix('broken_links')">处理</el-button>
+              <div class="lint-overview-card" :class="{ active: (lint.orphan_pages?.length || 0) > 0 }">
+                <div class="lint-overview-label">孤立页面</div>
+                <div class="lint-overview-num">{{ lint.orphan_pages?.length || 0 }}</div>
+                <div class="lint-overview-desc">无人引用、自身也无外联</div>
+                <el-button v-if="(lint.orphan_pages?.length || 0) > 0" size="small" type="primary" @click="openLintFix('orphan_pages')">处理</el-button>
+                <span v-else class="lint-overview-clean">✓ 无问题</span>
               </div>
-              <div v-if="lint.orphan_pages?.length" class="detail-item lint-row">
-                <span>孤立页面：{{ lint.orphan_pages.length }} 个</span>
-                <el-button size="small" type="primary" @click="openLintFix('orphan_pages')">处理</el-button>
+              <div class="lint-overview-card" :class="{ active: (lint.stale_pages?.length || 0) > 0 }">
+                <div class="lint-overview-label">过期内容</div>
+                <div class="lint-overview-num">{{ lint.stale_pages?.length || 0 }}</div>
+                <div class="lint-overview-desc">长期未更新（>180 天）</div>
+                <el-button v-if="(lint.stale_pages?.length || 0) > 0" size="small" type="primary" @click="openLintFix('stale_pages')">处理</el-button>
+                <span v-else class="lint-overview-clean">✓ 无问题</span>
               </div>
-              <div v-if="lint.stale_pages?.length" class="detail-item lint-row">
-                <span>过期内容：{{ lint.stale_pages.length }} 个</span>
-                <el-button size="small" type="primary" @click="openLintFix('stale_pages')">处理</el-button>
+              <div class="lint-overview-card" :class="{ active: (lint.placeholder_pages?.length || 0) > 0 }">
+                <div class="lint-overview-label">占位页</div>
+                <div class="lint-overview-num">{{ lint.placeholder_pages?.length || 0 }}</div>
+                <div class="lint-overview-desc">系统自动生成、待补充</div>
+                <el-button v-if="(lint.placeholder_pages?.length || 0) > 0" size="small" type="primary" @click="openLintFix('placeholder_pages')">处理</el-button>
+                <span v-else class="lint-overview-clean">✓ 无问题</span>
               </div>
-              <div v-if="!lint.suggestions" class="detail-item">尚未运行体检</div>
             </div>
+
+            <div v-if="lint.suggestions?.length" class="lint-suggestions">
+              <div v-for="(suggestion, i) in lint.suggestions" :key="i" class="lint-suggestion">{{ suggestion }}</div>
+            </div>
+            <div v-if="!lint.suggestions" class="detail-item">尚未运行体检，点右上角「开始体检」</div>
 
             <el-dialog
               v-model="lintFixDialog.open"
@@ -1366,9 +1391,10 @@
                 <el-table-column type="selection" width="48" />
                 <el-table-column v-if="lintFixDialog.category === 'broken_links'" label="源页面" prop="from" />
                 <el-table-column v-if="lintFixDialog.category === 'broken_links'" label="断链目标" prop="to" />
-                <el-table-column v-if="lintFixDialog.category !== 'broken_links'" label="页面" prop="slug" />
+                <el-table-column v-if="lintFixDialog.category !== 'broken_links'" label="页面" prop="title" />
+                <el-table-column v-if="lintFixDialog.category !== 'broken_links'" label="slug" prop="slug" width="180" />
                 <el-table-column v-if="lintFixDialog.category !== 'broken_links'" label="类型" prop="type" width="100" />
-                <el-table-column v-if="lintFixDialog.category === 'stale_pages'" label="上次更新" prop="last_updated" width="140" />
+                <el-table-column v-if="lintFixDialog.category === 'stale_pages'" label="上次更新" prop="updated" width="140" />
                 <el-table-column width="220">
                   <template #header>
                     <div class="lint-action-header">
@@ -1621,32 +1647,8 @@
     <!-- 知识维护：孤立实体 + Schema 合成（P3） -->
     <el-drawer v-model="maintenanceDrawer" size="48%" title="知识维护">
       <el-tabs v-model="maintenanceTab">
-        <el-tab-pane label="孤立实体 / 孤立页面" name="orphans">
-          <div class="maintenance-actions">
-            <el-button :loading="orphansLoading" @click="scanOrphans">扫描</el-button>
-            <el-button type="primary" :disabled="!orphansResult.dangling?.length" :loading="orphansFilling" @click="autoFillOrphans">
-              自动补齐占位页（{{ orphansResult.dangling?.length || 0 }}）
-            </el-button>
-            <el-button @click="refreshOrphansIndex">把孤页写入索引</el-button>
-          </div>
-          <div v-if="orphansResult.stats" class="maintenance-stats">
-            共 {{ orphansResult.stats.total_pages }} 页 · {{ orphansResult.stats.total_links }} 链接 · 孤立实体 {{ orphansResult.stats.dangling_count }} · 孤页 {{ orphansResult.stats.orphan_count }}
-          </div>
-          <h4>未找到目标的链接（dangling）</h4>
-          <el-empty v-if="!orphansResult.dangling?.length" description="无 dangling 链接" />
-          <ul v-else class="maintenance-list">
-            <li v-for="(d, i) in orphansResult.dangling" :key="`d${i}`">
-              <code>[[{{ d.target_slug }}]]</code> ← 来自 <code>{{ d.source }}</code>
-            </li>
-          </ul>
-          <h4>没有反向链接的孤页</h4>
-          <el-empty v-if="!orphansResult.orphans?.length" description="无孤页" />
-          <ul v-else class="maintenance-list">
-            <li v-for="(o, i) in orphansResult.orphans" :key="`o${i}`">
-              <code>{{ o.slug }}</code> ({{ o.type }}) — {{ o.title }}
-            </li>
-          </ul>
-        </el-tab-pane>
+        <!-- A 整改：「孤立实体 / 孤立页面」tab 已移除，统一去左栏「知识库体检」处理。
+             这里只留系统层面的事：连接状态 / 定时任务 / 源预览 / Schema 合成。 -->
         <el-tab-pane label="连接状态" name="connection">
           <div class="conn-status-grid">
             <div class="conn-status-card" :class="connStatus.local.ok ? 'ok' : 'fail'">
@@ -2015,11 +2017,15 @@ const staleCount = computed(() => {
 })
 
 // ── 知识库健康度评分 ──
+// 后端 graph.run_lint 已计算（断链*3 + 孤立*1 + 过期*0.5 + 占位*1.5）/总页数
+// 前端优先用后端值；旧版 / 未跑过体检时退化为本地估算
 const lintHealthScore = computed(() => {
+  if (typeof lint.value.health_score === 'number') return lint.value.health_score
   const broken = lint.value.broken_links?.length || 0
   const orphan = lint.value.orphan_pages?.length || 0
   const stale = lint.value.stale_pages?.length || 0
-  const total = broken + orphan + stale
+  const placeholder = lint.value.placeholder_pages?.length || 0
+  const total = broken * 3 + orphan + stale * 0.5 + placeholder * 1.5
   if (total === 0) return 100
   return Math.max(0, Math.round(100 - total * 3))
 })
@@ -2029,10 +2035,12 @@ const healthItems = computed(() => {
   const broken = lint.value.broken_links?.length || 0
   const orphan = lint.value.orphan_pages?.length || 0
   const stale = lint.value.stale_pages?.length || 0
+  const placeholder = lint.value.placeholder_pages?.length || 0
   return [
-    { label: '断链检测', val: Math.max(0, 100 - broken * 10), color: '#19bf78' },
-    { label: '孤立页面', val: Math.max(0, 100 - orphan * 8), color: '#f59e0b' },
-    { label: '内容新鲜', val: Math.max(0, 100 - stale * 5), color: '#3b82f6' },
+    { label: '断链检测', val: Math.max(0, 100 - broken * 10), color: '#19bf78', count: broken, category: 'broken_links' },
+    { label: '孤立页面', val: Math.max(0, 100 - orphan * 8), color: '#f59e0b', count: orphan, category: 'orphan_pages' },
+    { label: '内容新鲜', val: Math.max(0, 100 - stale * 5), color: '#3b82f6', count: stale, category: 'stale_pages' },
+    { label: '占位页', val: Math.max(0, 100 - placeholder * 8), color: '#a855f7', count: placeholder, category: 'placeholder_pages' },
   ]
 })
 
@@ -2132,7 +2140,17 @@ function setActiveView(view) {
     nextTick(scheduleRenderGraph)
   } else if (view === 'config' && currentRole.value === 'admin') {
     loadInvites()
+  } else if (view === 'lint' && !lint.value.summary) {
+    runLint()
   }
+}
+
+// 从首页健康度 row 跳到体检页 + 自动打开对应类别的修复弹窗
+function goLintCategory(category) {
+  setActiveView('lint')
+  nextTick(() => {
+    if ((lint.value[category]?.length || 0) > 0) openLintFix(category)
+  })
 }
 
 // ── 打开新建笔记对话框 ──
@@ -2219,7 +2237,12 @@ const lintFixDialog = ref({ open: false, category: null, items: [], selected: []
 const lintFixBulkAction = ref('')
 
 const lintFixDialogTitle = computed(() => {
-  const map = { broken_links: '修复断链', orphan_pages: '处理孤立页面', stale_pages: '处理过期页面' }
+  const map = {
+    broken_links: '修复断链',
+    orphan_pages: '处理孤立页面',
+    stale_pages: '处理过期页面',
+    placeholder_pages: '处理占位页',
+  }
   return map[lintFixDialog.value.category] || '体检处理'
 })
 
@@ -2227,13 +2250,21 @@ function lintFixActionOptions(category) {
   if (category === 'broken_links') {
     return [
       { value: 'remove', label: '删除该链接' },
-      { value: 'create_stub', label: '创建占位页' },
+      { value: 'create_stub', label: '创建空白占位页' },
+      { value: 'create_stub_smart', label: '智能补齐 (LLM 生成草稿)' },
     ]
   }
   if (category === 'orphan_pages') {
     return [
       { value: 'enrich', label: '自动补充关联' },
       { value: 'ignore', label: '标记独立(忽略)' },
+    ]
+  }
+  if (category === 'placeholder_pages') {
+    return [
+      { value: 'enrich', label: '智能补全 (LLM)' },
+      { value: 'accept', label: '接受存档(清除占位标记)' },
+      { value: 'delete', label: '删除占位页' },
     ]
   }
   return [
@@ -3974,6 +4005,7 @@ function openLintFix(category) {
     broken_links: 'remove',
     orphan_pages: 'enrich',
     stale_pages: 'touch',
+    placeholder_pages: 'enrich',
   }[category]
   const source = (lint.value[category] || []).map((row) => ({ ...row, action: defaultAction }))
   lintFixDialog.value = { open: true, category, items: source, selected: [] }
@@ -4436,7 +4468,7 @@ onBeforeUnmount(() => {
 
 // === 知识维护抽屉（P3：孤立实体 + Schema 合成） ===
 const maintenanceDrawer = ref(false)
-const maintenanceTab = ref('orphans')
+const maintenanceTab = ref('connection')
 const orphansLoading = ref(false)
 const orphansFilling = ref(false)
 const orphansResult = ref({})
