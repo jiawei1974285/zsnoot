@@ -1,378 +1,438 @@
 # 知枢 · 数合云智
 
-> 面向基层工作的本地化智能知识库工作台 —— 像平时一样随手记,LLM 自动整理成结构化的 wiki,自动发现人物、地点、案件之间的关联。
+> 把"日常材料"自动整理成"结构化知识网络"的本地知识中枢。
+>
+> 像平时一样上传 Word / PDF / 图片 / 笔记，LLM 自动抽实体、建关系、补反向链接、画图谱。云端只做认证与调度，**用户语料始终在本机**。
+
+[![Web V1.0](https://img.shields.io/badge/release-web--v1.0-blue)](https://github.com/jiawei1974285/zsnoot/releases/tag/web-v1.0)
+[![Tests](https://img.shields.io/badge/tests-92%20pass%20%2B%2032%20E2E-green)]()
+[![Architecture](https://img.shields.io/badge/arch-cloud%20%2B%20local-orange)]()
 
 ---
 
-## 两种运行模式（P5 起）
+## 1. 它能干什么
 
-| 模式 | 适用 | 特点 |
-|------|------|------|
-| **单体（默认）** | 单机演示、个人离线 | 一个 Flask 进程同时托管前端 + API；零配置；行为与改造前一致 |
-| **云本机分离** | 多用户客户、需统一鉴权 | 云端只做认证/调度/Schema 合成，**用户数据始终在本机**；浏览器跨域同时连云和本机 |
+围绕"个人 / 团队的知识管理"，按使用频率高低五块能力：
 
-### 分离模式架构
+### 1.1 材料入库
+- **多格式解析**：Word / PowerPoint / PDF / Markdown / TXT / Excel / 图片 OCR；缺解析库自动降级到 XML 兜底
+- **LLM 自动抽取**：单次 LLM 调用产出多个分类页面（人物 / 案件 / 事件 / 证据 / 结论 …）+ `[[wiki-link]]` 双向链接
+- **批次化 + 可回滚**：每次上传是一个批次，元数据完整保留；不满意一键回滚
+- **二次解析**：对历史批次"再追一刀"——拿现有上下文做更深的抽取，新结果与原页面合并而不是覆盖
+- **失败兜底**：解析失败的页面进 `status: 待精炼` 队列，不阻塞流程；后台或手动重试
+
+### 1.2 对话查询（RAG）
+- 自然语言问答，答案带可点击的来源引用
+- 命中关键词后沿 `[[wiki-link]]` 边走 N 跳把强相关页拉进上下文（默认 1 跳）
+- 问答结果自动沉淀为 `outputs/` 类型记忆页，下次同问可命中
+- > 当前版本是手写的"中文 bigram 加权计数"检索；向量化是路线图项
+
+### 1.3 知识浏览与编辑
+- **卡片视图**：所有 wiki 页按目录分类，多维度排序（最后导入 / 更新 / 创建 / 标题），支持多选批量操作
+- **新建笔记**：标题 + URL + 正文 + 标签；URL 一键提取网页正文，提交后走完整 LLM 抽取链路
+- **关系图谱**：D3 力导向布局，4 种排布（force / type / community / radial），点节点聚焦一度邻居
+- **源文档预览**：知识维护抽屉里直接调本机 file_parser 解析任意 raw 文件
+
+### 1.4 知识库体检（A 整改后唯一权威）
+- **4 类问题统一概览**：断链 / 孤立 / 过期 / 占位
+- **健康度透明公式**：`100 − (断链×3 + 孤立×1 + 过期×0.5 + 占位×1.5) × 100 / 总页数`
+- **修复动作**（按类）：
+  - 断链：删链接 / 创建空白占位页 / **智能补齐**（LLM 根据上下文写草稿）
+  - 孤立：自动补充关联（LLM enrich）/ 标记独立
+  - 过期：标记已确认 / 标记独立
+  - 占位：智能补全（LLM）/ 接受存档 / 删除
+- **首页 KPI 直达**：健康度卡片可点；右侧栏每一行可点 → 直接弹出对应类别的修复对话框
+
+### 1.5 系统能力
+- **多 schema 模板**：5 套预置（警务办案 / 法律合规 / 财务营销 / 科研项目 / 通用知识库）+ **LLM 合成自定义 schema**（输目标 + 主要对象，agent 生成）
+- **定时任务**：APScheduler；4 种白名单 kind（inbox 扫描 / 孤页索引刷新 / wiki 体检 / 自动补齐）
+- **多用户**：邀请码注册；管理员控制台看所有用户心跳与计数
+- **数据隔离**：每个用户独立目录 `~/.handynotes/<username>/{wiki,raw,data,config,.env}`，互不可见
+
+---
+
+## 2. 三种部署形态
+
+| 形态 | 使用场景 | 启动 | 跨用户 |
+|------|---------|------|--------|
+| **单体（Monolith）** | 单人离线 / 演示 / 老部署回滚 | `scripts\start.bat` | ✗ |
+| **本机分离（Local Split）** | 一台开发机起三进程方便联调 | `scripts\start_split.bat` | ✗ |
+| **服务器（Server）** | 多人共享，云端做认证调度 | `deploy/install.sh` | ✓ |
+
+三者**共用同一份代码**，由环境变量切换；任何形态都可零代码改动迁回上一形态。
+
+### 2.1 架构（服务器形态）
 
 ```
-┌──────── 浏览器（前端 SPA，部署在云端 CDN） ────────┐
-│  /api/cloud/*  ─────►  云端控制面 (port 5005)      │
-│  /api/*        ─────►  本机 agent (127.0.0.1:5004) │
-└─────────────────────────────────────────────────────┘
-                │                    │
-        ┌───────▼──────┐    ┌────────▼──────────────┐
-        │ 用户/邀请码   │    │ 用户数据：~/.handynotes/│
-        │ Schema 模板   │    │   <username>/         │
-        │ Schema 合成   │    │     wiki/ raw/ data/  │
-        │ 心跳 / Admin  │    │     config/ .env      │
-        │ cloud/data/   │    │ LLM key / 文件解析    │
-        │   users.json  │    │ 定时任务 / 孤页补齐   │
-        └───────────────┘    └───────────────────────┘
+┌──────────── 浏览器 (前端 SPA) ────────────┐
+│   /api/cloud/*  ─►  云端 (Nginx :8090 ─► :5005)
+│   /api/*        ─►  本机 agent (127.0.0.1:5004)
+└────────────────────────────────────────────┘
+         │                     │
+   ┌─────▼──────┐       ┌──────▼─────────────┐
+   │ 云端控制面 │       │ 本机 agent          │
+   │ 用户/邀请码 │       │  ~/.handynotes/<u>/│
+   │ Schema 模板│       │   wiki/ raw/ .env  │
+   │ Schema 合成│       │  LLM API key       │
+   │ 心跳 / 调度│       │  入库 / 体检 / 调度 │
+   └───────────┘       └────────────────────┘
+   PostgreSQL ❌（V1.0 用 JSON）   每个用户的电脑
 ```
 
-### 阶段路线（已实现）
+**云端绝不接触用户语料**——这是产品价值的核心承诺。云端只持有用户名 / 哈希密码 / 邀请码 / Schema 模板 / 心跳计数。
 
-- **P1** 进程拆分 + JWT 双向（cloud HS256 共享密钥 → local 验签）
-- **P2-A** 5 套 schema 模板（警务/法律/财务营销/科研/通用）+ 注册时选模板
-- **P2-B** 数据目录按用户隔离 `~/.handynotes/<user>/`；JWT.sub 必须等于本机绑定用户（412 / 403 双闸）
-- **P3** Schema 合成 agent（goal+objects → 结构化 schema；LLM 失败退化 mock）+ 孤立实体/孤页扫描与自动补齐占位页
-- **P4** 源文档预览（路径双闸 + 文本/二进制双通道）+ APScheduler 定时任务（4 种白名单 kind）
-- **P5** 心跳上报 + admin 用户控制台 + 双连接状态指示
+---
 
-> 详细启动、双进程部署、JWT 密钥管理见 **`cloud/README.md`**。
+## 3. 快速开始
 
-### 分离模式 30 秒启动
+### 3.1 单体演示（5 分钟）
 
 ```bash
-# 1. 本机绑定到云端用户名（agent 接受 JWT 的安全闸门）
-python -m scripts.bind_user bind alice
+git clone -b web-v1.0 https://github.com/jiawei1974285/zsnoot.git
+cd zsnoot
 
-# 2. 启动两个进程
-python app.py                                  # 本机 agent，5004
-python -m cloud.main                           # 云端控制面，5005（admin 跑这个）
-
-# 3. 前端
-cd frontend
-echo "VITE_CLOUD_API=http://127.0.0.1:5005" > .env.local
-echo "VITE_LOCAL_API=http://127.0.0.1:5004" >> .env.local
-npm run dev                                    # 5174
-```
-
-可选：设 `MJQ_CLOUD_LLM_API_KEY` 让云端 Schema 合成走真实 LLM；不设则进入 mock 规则化模式（仍可演示）。
-
----
-
-## 项目简介
-
-**核心问题**:基层民警日常会产生大量笔记、案件记录、巡查信息,但这些信息散落在笔记本、手机、微信群等各处,难以检索和关联,无法自动发现串并案线索,经验技巧也难以传承。
-
-**解决方案**:
-1. 民警按习惯随手记(语音、文字、图片、文档)
-2. LLM 自动把笔记编译成结构化的 markdown wiki(案件 / 人物 / 地点 / 法规 / 技战法 / 笔记 / 研判)
-3. 自动建立人物、地点、案件之间的双向链接,生成知识图谱
-4. 支持对话式查询、串并案分析、知识体检与维护
-
-详细产品定位见 `purpose.md`,wiki schema 定义见 `schema.md`。
-
----
-
-## 主要功能
-
-| 模块 | 能力 |
-|---|---|
-| **材料入库** | 拖入 Word / PDF / Markdown / Excel / 图片 / 文本,自动解析、抽取实体、生成 wiki 页面、建立 `[[wiki-link]]`、按批次可回滚，也可对历史批次再次解析并与既有知识合并 |
-| **对话查询** | 基于本地知识库的 RAG 问答,带可点击的知识来源引用,问答结果自动沉淀为 outputs 类型记忆页 |
-| **整理后的知识** | 卡片视图浏览所有 wiki 页面,支持按类别筛选、按最后导入/更新/创建/标题排序、分页大小自定义、多选批量删除、单击查看 |
-| **新建笔记** | 在上传材料下方提级显示，可输入标题、URL、正文和标签；URL 可一键提取网页正文，保存后会进入 LLM 深度解析，抽取实体和关系并合并生成知识页与关系图谱 |
-| **关系图谱** | D3 力导向布局,支持 4 种排布(force / type / community / radial)。**单击节点**:① 一度邻居聚焦(其他淡化) ② 同时滑出该实体 wiki 详情抽屉。「重置视图」恢复全图 |
-| **知识库体检** | 检测断链、孤立页面、过期内容(>30 天未更新)。**一键修复**:按类别弹窗,勾选条目 + 选动作(删除链接 / 创建占位页 / 自动补充关联 / 标记独立 / 触发更新) |
-| **系统配置** | LLM 模型 / API key / 知识库路径 / 入库阈值 等可视化配置,支持模型连通性测试 |
-
----
-
-## 技术栈
-
-**后端** (`Python ≥ 3.10`)
-- Flask 3 — Web 框架与 API；Werkzeug 提供密码哈希
-- PyYAML — frontmatter 解析
-- python-docx / python-pptx / PyMuPDF / pandas+openpyxl / Pillow — 多格式文档解析（懒加载）
-- watchdog — 文件系统监听（可选自动入库）
-- requests — LLM HTTP 调用
-- 内置：`logging` + `RotatingFileHandler` 写 `mjq.log`，`data/llm_calls.jsonl` 持久化每次 LLM 调用耗时与异常详情
-
-**前端** (`Node ≥ 18`)
-- Vue 3.5 (Composition API)
-- Element Plus 2.11 — UI 组件库
-- D3 7 — 知识图谱可视化
-- ECharts 6 + vue-echarts — 首页 dashboard 折线/饼图
-- Vite 7 — 构建工具
-
-**数据存储**
-- 文件式 wiki：每条知识是一个带 frontmatter 的 `.md`，直接 git 友好
-- 批次元数据：`data/ingest_batches.json`
-- 用户/邀请码：`data/users.json` + `data/invite_codes.json`
-- 活动日志：`data/activity_log.json`（用于首页统计） + `wiki/log.md`（人类可读审计）
-- LLM 调用流水：`data/llm_calls.jsonl`（结构化，便于离线分析耗时与失败模式）
-
-> **检索说明**：当前版本 `/api/chat` 走的是手写的「中文 bigram 分词 + 标题/正文/标签加权计数」检索，**未启用向量索引**。后续若要升级到 embedding-based RAG，会在 `embeddings/` 目录下落盘 numpy 向量。
-
----
-
-## 快速开始
-
-### 安装依赖
-
-```bash
-# 后端
 pip install -r requirements.txt
+cd frontend && npm install && cd ..
 
-# 前端
-cd frontend
-npm install
-cd ..
+# Windows 一键
+scripts\start.bat        # → http://localhost:5174
+
+# 或手动
+python app.py            # 后端 5004
+cd frontend && npm run dev   # 前端 5174（vite proxy 转 5004）
 ```
 
-### 运行(开发模式)
+首次进入：填管理员账号 → 选 `raw/` 目录 → 进入主界面。
 
-**一键启动（推荐，Windows）**
+### 3.2 服务器部署（生产）
 
-```cmd
-:: 双击或在 PowerShell 执行
-scripts\start.bat
-```
-
-会弹出两个新终端窗口，分别跑 Flask（5004）和 Vite dev（5174），首次会自动检查端口占用、依赖完整性。停止：双击 `scripts\stop.bat` 或关掉两个窗口。
-
-**手动启动**
+详见 [`deploy/README.md`](deploy/README.md)。一键脚本：
 
 ```bash
-# 终端 A — 启动后端 (默认 http://localhost:5004)
-python app.py
-
-# 终端 B — 启动前端开发服务器 (热重载,http://localhost:5174,代理到 5004)
-cd frontend
-npm run dev
+sudo git clone -b web-v1.0 https://github.com/jiawei1974285/zsnoot.git /opt/mjq-handynotes
+cd /opt/mjq-handynotes
+sudo bash deploy/install.sh <服务器 IP 或域名>
 ```
 
-### 运行(生产模式 / 一键启动)
+脚本会：
+1. 装 python3 / nodejs ≥ 22 / nginx
+2. 建 system 账号 `mjq`，配 venv
+3. 生成 `cloud.env`（含**随机 64 hex JWT 密钥**，输出到屏幕——记下）
+4. 构建前端（baked `VITE_CLOUD_API=http://<IP>`）
+5. 装 systemd 单元，nginx 站点；自检三个 endpoint
 
-```bash
-# 1. 构建前端 → frontend/dist/
-cd frontend
-npm run build
-cd ..
+### 3.3 本机 agent 连服务器
 
-# 2. 启动后端,Flask 直接服务 dist/ 静态资源
-python app.py
-# 浏览器打开 http://localhost:5004
+每个用户在自己电脑（Windows / Mac / Linux）：
+
+```powershell
+# Windows PowerShell（Mac / Linux 用 export）
+$env:MJQ_CLOUD_URL    = "http://<服务器 IP>"
+$env:MJQ_JWT_SECRET   = "<服务器 cloud.env 里那串 hex>"
+$env:MJQ_LOCAL_CORS_ORIGINS = "http://<服务器 IP>"
+
+python -m scripts.bind_user bind <自己的用户名>   # 与浏览器登录用名一致
+python app.py                                       # 监听 127.0.0.1:5004
 ```
 
-### 配置
-
-**敏感凭据走 `.env`**（不会被 git 跟踪）：
-
-```bash
-cp .env.example .env
-# 编辑 .env 填入：LLM_API_KEY / LLM_BASE_URL / LLM_MODEL / LLM_PROVIDER
-```
-
-**非敏感设置走 `config/config.yaml`**：模型温度、知识库路径、ingest 并发参数（`single_call`、`max_workers`）、自定义类目等。
-
-也可以启动后通过「系统配置」tab 在 Web 界面里改，改完点「测试连接」确认模型可达。
-
-### 首次登录
-
-第一次启动会进入「初始化」流程，引导你创建第一个**管理员账号**。后续要让同事使用：管理员在「系统配置」→「用户与邀请码」生成一次性邀请码，对方在登录页「注册」tab 输入邀请码 + 用户名/密码 + 单位 + 职务即可加入。
+浏览器打开 `http://<服务器 IP>` 注册/登录；所有数据落本机 `~/.handynotes/<username>/`。
 
 ---
 
-## 目录结构
+## 4. 第一次使用流程
 
-```
-mjq-handynotes/
-├── app.py                      # Flask 主入口，所有 API 路由
-├── auto_ingest.py              # 自动入库流水线（single_call + two_call 双模式）
-├── ingest_service.py           # 入库批次编排（ThreadPoolExecutor 并发）
-├── ingest_batches.py           # 批次元数据存储
-├── file_parser.py              # 多格式文档解析（docx/pptx/pdf/xlsx/img）
-├── file_watcher.py             # 文件夹监听（可选）
-├── graph.py                    # 知识图谱构建 + 体检逻辑（run_lint）
-├── wiki_links.py               # [[wiki-link]] 双向链接工具
-├── llm_client.py               # LLM 调用（含结构化耗时与异常日志）
-├── llm_tester.py               # LLM 连通性测试
-├── auth.py                     # 用户 + 邀请码 + 角色（admin/member）
-├── activity_log.py             # 活动日志，首页 KPI/趋势数据源
-├── agent_status.py             # 入库进度状态（线程安全原子写）
-├── config_store.py             # 配置读写
-├── mjq_logging.py              # 集中 logging 配置（RotatingFileHandler）
-├── config/config.yaml          # 非敏感配置
-├── .env.example                # 敏感凭据样板（复制为 .env 后填）
-├── requirements.txt            # Python 依赖
-│
-├── scripts/
-│   ├── start.bat / start.ps1   # 一键启动前后端
-│   ├── stop.bat  / stop.ps1    # 一键停止
-│   └── retry_stale.py          # 批量重试入库失败的「待精炼」页面
-│
-├── wiki/                       # 知识库本体（markdown 文件，运行时生成，未入 git）
-│   ├── cases/ persons/ locations/ laws/ techniques/ notes/
-│   ├── organizations/ events/ evidence/ case_summaries/
-│   ├── crime_patterns/ conclusions/ outputs/ summaries/
-│   ├── templates/              # 实体页模板（入 git）
-│   ├── index.md                # 全部页面索引
-│   └── log.md                  # 时间倒序活动日志
-│
-├── raw/sources/<batch_id>/     # 上传的原始材料归档（运行时生成，未入 git）
-├── data/                       # 批次/用户/邀请码/活动日志/LLM 调用流水（未入 git）
-│
-├── frontend/                   # Vue + Vite 前端
-│   ├── public/                 # 静态资源（logo 等）
-│   ├── src/App.vue             # 主组件（所有视图）
-│   ├── src/styles.css          # 全局样式
-│   ├── src/graphLayouts.js     # D3 图谱布局算法
-│   ├── package.json
-│   └── vite.config.js
-│
-├── tests/                      # Python 单元测试（治理、入库、图谱体检、文件解析等）
-├── purpose.md                  # 产品目标
-├── schema.md                   # wiki 数据结构规范
-└── README.md                   # 本文件
-```
+### 4.1 管理员（admin）首次
+
+1. 浏览器开服务器地址 → "初始化设置"
+2. 填用户名 + 密码 + 单位 + 职务 + **选 schema 模板**（首次不可改，后续可在维护抽屉里自定义）
+3. 进主界面 → 弹"原始材料 raw 目录"对话框 → 选默认或自定义路径
+4. 系统配置 → 填 LLM API key（不会同步到云端）→ 点测试连接
+5. 系统配置 → 用户与邀请码 → 生成邀请码发给同事
+
+### 4.2 成员（member）注册
+
+1. 服务器地址 → 切到"注册"tab
+2. 填邀请码 + 用户名 + 密码 + 单位 + 职务 + **选 schema 模板**
+3. 注册成功 → 自动登录 → 同管理员一样配 raw 目录 + LLM key
+
+### 4.3 日常用法
+
+- **拖文件入库**：左栏"上传材料" → 拖 N 个文件 → 看进度 → 完成后看产出的卡片
+- **查问题**：左栏"对话查询" → 自然语言问 → 答案带来源
+- **看图谱**：左栏"关系图谱" → 选排布方式 → 点节点看一度邻居
+- **维护**：左栏"知识库体检" → 看 4 张概览 → 点"处理"批量修
+- **定时任务**：左栏底部"知识维护" → 定时任务 tab → 建一个"每天 02:00 体检"
 
 ---
 
-## API 概览
+## 5. 配置与环境变量
 
-所有接口前缀 `/api`，仅本地访问，鉴权用 Flask session cookie。详见 `app.py`。
+### 5.1 用户级（在本机 `.env`，每用户独立）
+
+| 字段 | 说明 |
+|------|------|
+| `LLM_API_KEY` | LLM 服务 API key（OpenAI 兼容协议） |
+| `LLM_BASE_URL` | 例如 `https://api.deepseek.com/v1` |
+| `LLM_MODEL` | 例如 `deepseek-chat` 或 `gpt-4o-mini` |
+| `LLM_PROVIDER` | `openai` / `deepseek` 等（影响个别字段） |
+| `VISION_MODEL_*` | 图片解析专用模型（可与 LLM 不同） |
+| `OCR_MODEL_*` | OCR 专用模型 |
+
+可视化在主界面"系统配置"修改。
+
+### 5.2 进程级（环境变量，本机 agent 启动时）
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `MJQ_CLOUD_URL` | `http://127.0.0.1:5005` | 云端 baseURL |
+| `MJQ_JWT_SECRET` | 自动生成 | **必须与云端同**，跨进程验签的共享密钥 |
+| `MJQ_LOCAL_CORS_ORIGINS` | dev 端口 | 哪些前端域名允许跨域调本机 |
+| `MJQ_USER_HOME` | `~/.handynotes` | 用户数据根（测试用，生产别动） |
+| `MJQ_AUTOBIND` | 不开 | 1=首个有效 JWT 自动绑定（开发友好） |
+| `MJQ_AGENT_TOKEN` | 空 | 心跳后台线程用的长期 token（P5+ 工程债） |
+
+### 5.3 云端（服务器 `/opt/mjq-handynotes/cloud.env`）
+
+| 变量 | 说明 |
+|------|------|
+| `MJQ_CLOUD_HOST` / `PORT` | 监听地址（生产建议 `127.0.0.1:5005`，前面挂 Nginx） |
+| `MJQ_JWT_SECRET` | **必须与本机 agent 同** |
+| `MJQ_CLOUD_CORS_ORIGINS` | 前端来源白名单 |
+| `MJQ_CLOUD_LLM_API_KEY` | Schema 合成 agent 的独立 LLM key（可选；不设走 mock） |
+| `MJQ_CLOUD_LLM_BASE_URL` / `MODEL` | 同上 |
+
+---
+
+## 6. 数据存储与隐私
+
+### 6.1 哪些放本机（每用户独立）
+
+- `~/.handynotes/<u>/wiki/`        所有知识页（markdown）
+- `~/.handynotes/<u>/raw/sources/` 上传归档的原文
+- `~/.handynotes/<u>/data/`        批次元数据 / 活动日志 / scheduled_tasks / schema_binding
+- `~/.handynotes/<u>/config/`      schema.yaml / config.yaml
+- `~/.handynotes/<u>/.env`         **LLM API key 等敏感凭据**
+- `~/.handynotes/<u>/embeddings/`  向量缓存（路线图）
+- `~/.handynotes/<u>/mjq.log`      结构化日志
+
+### 6.2 哪些放云端
+
+- `cloud/data/users.json`         用户名 / **哈希密码** / role / unit / title / template_key
+- `cloud/data/invite_codes.json`  邀请码（一次性）
+- `cloud/data/heartbeats.json`    每用户最近一次心跳计数（无任何语料）
+- `cloud/templates/*.yaml`        5 套 schema 模板（公共）
+- `<install>/config/jwt.secret`   云本机共享的 JWT 签名密钥
+
+### 6.3 LLM 调用路径
+
+- 用户语料 → 用户**自己的本机 LLM key** → LLM 服务（点对点）
+- Schema 合成（仅元数据）→ **云端独立 LLM key**（与用户分开计费）
+
+---
+
+## 7. API 概览
+
+### 7.1 云端 (`/api/cloud/*`)
+
+| 路径 | 方法 | 说明 |
+|------|------|------|
+| `/api/cloud/health` | GET | 健康 + 能力披露（前端连接灯用） |
+| `/api/cloud/auth/{status,setup,login,register,refresh,logout,change-password}` | GET/POST | 鉴权流程 |
+| `/api/cloud/admin/invites` | GET/POST/DELETE | 邀请码 CRUD（admin） |
+| `/api/cloud/admin/users` | GET | 用户表 + 心跳（admin） |
+| `/api/cloud/schema/templates` | GET | 5 套模板概览（公开） |
+| `/api/cloud/schema/template/<key>` | GET | 模板完整内容 |
+| `/api/cloud/schema/me` | GET | 当前用户 schema（custom > template） |
+| `/api/cloud/schema/synthesize` | POST | LLM 合成 schema（goal+objects） |
+| `/api/cloud/schema/apply-custom` | POST | 把合成结果存为用户 custom schema |
+| `/api/cloud/agent/heartbeat` | POST | 本机 agent 心跳上报 |
+
+### 7.2 本机 agent (`/api/*`)
 
 | 分类 | 路径 | 方法 | 说明 |
 |---|---|---|---|
-| **鉴权** | `/api/auth/status` | GET | 当前登录态 + role |
-| | `/api/auth/setup` | POST | 首次创建管理员账号（仅当 users.json 为空） |
-| | `/api/auth/register` | POST | 凭邀请码注册成员 |
-| | `/api/auth/login` / `logout` | POST | 登录 / 登出 |
-| | `/api/auth/change-password` | POST | 修改密码 |
-| **管理** | `/api/admin/invites` | GET / POST | admin：列出 / 生成邀请码 |
-| | `/api/admin/invites/<code>` | DELETE | admin：撤销未用邀请码 |
-| **页面** | `/api/wiki/pages` | GET / POST | 列出页面；POST 当前保持只读保护（支持 `?type=cases`） |
-| | `/api/wiki/pages/<slug>` | GET / PUT / DELETE | 读 / 改 / 删单页（当前 PUT 只读保护，DELETE 可从知识卡片删除） |
-| | `/api/wiki/categories` | GET | 列出 wiki 子类目 |
-| | `/api/wiki/index` / `log` | GET | 读索引/日志 |
-| **入库** | `/api/ingest/upload` | POST | 上传材料并触发并发入库 |
-| | `/api/ingest/batches` | GET | 列出历史批次 |
-| | `/api/ingest/batches/<id>` | GET | 单批次详情 |
-| | `/api/ingest/batches/<id>/rollback` | POST | 回滚批次（删除产物） |
-| | `/api/ingest/batches/<id>/reparse` | POST | 复用归档原文再次解析，带历史结果上下文做补充抽取，并合并新实体/关系 |
-| | `/api/ingest/stale` | GET | 列出 status:待精炼 的 fallback 页面 |
-| | `/api/ingest/retry-stale` | POST | 重跑指定 stale 页面（成功后删原页） |
+| **健康** | `/api/health` | GET | 公开端点；前端连接灯 |
+| **页面** | `/api/wiki/pages` | GET / POST | 列出 / 创建（POST 默认只读保护） |
+|         | `/api/wiki/pages/<slug>` | GET / PUT / DELETE | 读 / 改 / 删 |
+|         | `/api/wiki/categories` | GET | schema-aware 子目录列表 |
+|         | `/api/wiki/index` / `log` | GET | 索引与活动日志 |
+| **入库** | `/api/ingest/upload` | POST | 上传材料 |
+|         | `/api/ingest/batches` | GET/DELETE | 批次列表 |
+|         | `/api/ingest/batches/<id>/{rollback,reparse}` | POST | 回滚 / 二次解析 |
+|         | `/api/ingest/{stale,retry-stale}` | GET/POST | 待精炼队列管理 |
 | **检索** | `/api/search` | GET | 关键词加权检索 |
-| | `/api/chat` | POST | 知识库 QA（自动沉淀为 outputs/） |
-| **图谱** | `/api/graph` | GET | 全图（节点 + 边 + 社区） |
-| | `/api/graph/merged` | GET | 合并相近节点（`?threshold=0.3`） |
-| **体检** | `/api/lint` | GET | 检测断链/孤立/过期 |
-| | `/api/lint/fix` | POST | 按类别批量修复 |
-| **富化** | `/api/analyze/<slug>` | POST | LLM 重新抽取实体 |
-| | `/api/enrich/<slug>` | POST | 自动补充 `[[wiki-link]]` |
-| **统计** | `/api/stats` | GET | 首页 dashboard 数据（KPI + 趋势 + 最近问答） |
-| | `/api/activity` | GET | 最近活动日志 |
-| | `/api/agent/status` | GET | 入库实时进度推送 |
-| **配置** | `/api/config` | GET / PUT | 读 / 写配置 |
-| | `/api/config/test-llm` | POST | 测试 LLM 连通性 |
-| **关联** | `/api/cases/<slug>/related` | GET | 串并案推荐 |
-| | `/api/themes` / `/api/themes/<theme>` | GET | 主题视图 |
+|         | `/api/chat` | POST | 对话查询（带源引用） |
+| **图谱** | `/api/graph` / `/api/graph/merged` | GET | 全图 / 合并视图 |
+| **体检** | `/api/lint` | GET | 4 类问题 + health_score |
+|         | `/api/lint/fix` | POST | 按类别批量修复 |
+| **维护** | `/api/orphans/scan` | GET | 孤立扫描（被 lint 复用） |
+|         | `/api/orphans/dangling/auto-fill` | POST | 批量补占位页 |
+|         | `/api/orphans/index/refresh` | POST | 写孤页区块到 index.md |
+| **预览** | `/api/source/preview?path=&format=` | GET | 解析任意 raw 文件 |
+|         | `/api/source/raw?path=` | GET | 流式二进制 |
+| **调度** | `/api/schedule/tasks` | GET/POST/PUT/DELETE | 定时任务 CRUD |
+|         | `/api/schedule/tasks/<id>/run-now` | POST | 立即触发 |
+| **配置** | `/api/config` | GET/PUT | 读 / 写本机配置 |
+|         | `/api/config/test-llm` | POST | 测 LLM 连通性 |
+| **统计** | `/api/stats` | GET | 首页 dashboard 数据 |
+|         | `/api/activity` | GET | 最近活动 |
+|         | `/api/agent/status` | GET | 入库实时进度 |
+
+详见 `app.py`（本机 60+ 路由）和 `cloud/main.py`（云端 17 路由）。
 
 ---
 
-## Wiki 数据规范
+## 8. 目录结构
 
-每个页面是带 YAML frontmatter 的 markdown 文件:
-
-```markdown
----
-type: case | person | location | law | technique | note | summary | outputs
-title: 人类可读标题
-tags: []
-related: []
-created: YYYY-MM-DD
-updated: YYYY-MM-DD
-# 案件页额外:case_type / status / date_occurred
-# 人物页额外:role / case_ref
-# 地点页额外:address / case_refs
----
-
-正文内容,使用 [[other-slug]] 建立双向链接。
-
-## 反向关联
-
-- [[backlink-slug]]
+```
+zsnoot/
+├── app.py                       本机 agent 入口
+├── auth.py                      用户/邀请码（共享给 cloud）
+├── auto_ingest.py               入库流水线（schema-aware）
+├── ingest_service.py            批次编排（并发）
+├── ingest_batches.py            批次元数据
+├── file_parser.py               多格式解析（懒加载依赖）
+├── file_watcher.py              inbox 文件监听
+├── graph.py                     图谱构建 + run_lint（唯一健康源）
+├── wiki_links.py                [[wiki-link]] 双向链接
+├── llm_client.py                用户 LLM 调用器（读用户 .env）
+├── llm_tester.py                LLM 连通性
+├── activity_log.py              活动日志（首页 KPI 数据源）
+├── agent_status.py              入库实时进度
+├── config_store.py              .env / config.yaml 读写
+├── mjq_logging.py               结构化 logging
+├── schema_runtime.py            (P2-A) 运行时 schema 解析
+├── user_data.py                 (P2-B) install_dir vs user_data_dir
+├── agent_bootstrap.py           (P2)   首登从云拉 schema
+├── orphan_detector.py           (P3)   孤立 + 占位补齐工具
+├── scheduler.py                 (P4)   APScheduler 单例
+├── heartbeat.py                 (P5)   心跳上报
+│
+├── cloud/
+│   ├── main.py                  云端 Flask
+│   ├── jwt_utils.py             共享密钥 / 签发 / 验签
+│   ├── auth_service.py 复用根 auth.py
+│   ├── llm.py                   云端独立 LLM 调用
+│   ├── schema_synth.py          LLM 合成 agent
+│   ├── templates_service.py     模板加载
+│   ├── templates_/*.yaml        5 套预置 schema
+│   ├── heartbeat_store.py       心跳持久化
+│   └── README.md                云端启动详解
+│
+├── deploy/
+│   ├── install.sh               一键部署
+│   ├── cloud.service            systemd 单元
+│   ├── nginx.conf               Nginx 站点
+│   ├── cloud.env.example        环境变量模板
+│   └── README.md                部署指南（含 HTTPS 切换）
+│
+├── scripts/
+│   ├── bind_user.py             本机绑定 CLI
+│   ├── start.{bat,ps1}          单体一键
+│   ├── start_split.{bat,ps1}    分离一键
+│   └── retry_stale.py           批量重试待精炼
+│
+├── frontend/
+│   ├── src/App.vue              主组件
+│   ├── src/styles.css           全局样式
+│   ├── src/apiClient.js         双 baseURL + JWT 客户端
+│   ├── src/{graphLayouts,pageSorting,chatSources}.js
+│   └── .env.example             VITE_CLOUD_API / VITE_LOCAL_API
+│
+├── tests/
+│   ├── test_full_e2e.py         (P1-P5) 32 项断言
+│   └── test_*.py                既有 92 用例
+│
+├── purpose.md                   产品定位
+├── schema.md                    Wiki 数据规范（可读版）
+└── README.md                    本文件
 ```
 
-完整规范见 `schema.md`。
-
 ---
 
-## 开发说明
-
-### 跑测试
+## 9. 测试
 
 ```bash
-python -m unittest discover tests
+# 既有单元测试（92 用例）
+python -m pytest tests/ --ignore=tests/test_full_e2e.py -q
+
+# 全链路 E2E（32 断言；启动临时云端 + 本机 agent）
+python tests/test_full_e2e.py
 ```
 
-涵盖:`config_store`、`wiki_links`、`wiki_categories`、`ingest_batches`、`file_parser`、`llm_tester`。
-
-### 前端图谱布局算法测试
-
-```bash
-cd frontend
-npm run test:graph
-```
-
-### 调整图谱视觉
-
-- 画布尺寸:`App.vue` 中 `renderGraph()` 内 `width=1400 / height=900`,`styles.css` `.graph-svg height: 820px`
-- 节点半径:`Math.max(5, Math.min(13, 5 + linkCount * 1.0))`
-- 节点字号:`styles.css` `.graph-node text font-size: 9px`
-- 一度淡化:`styles.css` `.graph-dimmed { opacity: 0.08; pointer-events: none }`
-
-### 自定义 LLM 提示词
-
-入库与抽取的 prompt 集中在 `auto_ingest.py`,体检建议在 `graph.py:generate_lint_suggestions`,对话 prompt 在 `app.py /api/chat` 内。
+E2E 覆盖 P1-P5 所有架构契约：进程边界 / JWT 双向 / 5 模板注册 / 数据隔离 / Schema 合成 / 孤立扫描与补齐 / 文档预览 / 定时任务 / 心跳 / admin 视图。
 
 ---
 
-## 故障排查
+## 10. 故障排查
 
 | 现象 | 排查方向 |
-|---|---|
-| 启动后访问空白页 | 确认 `frontend/dist/` 存在；若无，先 `cd frontend && npm run build` |
-| 浏览器看不到改动 | 浏览器硬刷新 `Ctrl+Shift+R` 清旧 bundle 缓存 |
-| 上传后批次「待精炼」太多 | `python scripts/retry_stale.py --list` 看清单；`--all --limit 5` 试跑 |
-| 「上传慢」不知道怎么回事 | 看 `data/llm_calls.jsonl` 最后几行：每行有 latency_ms 和具体异常 |
-| LLM 调用报错 | 「系统配置」点「测试连接」；确认 .env 里 LLM_* 字段；查 `mjq.log` |
-| `.pptx`/Excel/PDF 入库失败 | 检查对应解析库是否装好（`pip install -r requirements.txt`） |
-| 文件监听不生效 | 确认 `watchdog` 已装，且 `config.yaml` 中 watcher 段配置对 |
-| 端口被占启动失败 | `scripts/stop.bat` 一键停，或手工 `taskkill /F /PID <pid>` |
+|------|----------|
+| 浏览器报 "无法连接后端" | 检查云端 `systemctl status mjq-cloud`；浏览器硬刷 `Ctrl+Shift+R` |
+| 报 "Failed to fetch" | 本机 agent 没启 / CORS 白名单缺当前域名 |
+| 报 `agent_not_bound` (412) | 本机没绑：`python -m scripts.bind_user bind <name>` 后重启 agent |
+| 报 `wrong_user` (403) | JWT.sub 与本机绑定不一致；登录的用户名要与 `bind_user` 的相同 |
+| 上传后批次"待精炼"很多 | `python scripts/retry_stale.py --list` 看清单；`--all --limit 5` 试跑 |
+| LLM 调用慢 / 失败 | 系统配置点"测试连接"；查 `~/.handynotes/<u>/data/llm_calls.jsonl` |
+| schema 没切换 | 重启本机 agent（`PROJECT_DIR` 是模块级，需要重启） |
+| 端口被占 | `scripts\stop.bat`（单体）/ `stop_split.bat`（分离） |
+| nginx 502 但 cloud `active` | `journalctl -u mjq-cloud -n 50` 看 cloud 报错；通常是 cloud crash |
+| 占位页满天飞 | 体检 → 占位页 tab → 智能补全或批量删除 |
 
-`mjq.log` 是结构化应用日志（含 LLM 调用耗时与异常 traceback），`data/llm_calls.jsonl` 是每次 LLM 调用的结构化记录。
-
----
-
-## 路线图（待办）
-
-- [ ] 删除页面时联动清理反向链接（目前仅删 `.md`，体检会发现残留断链）
-- [ ] 真正的向量检索（embedding-based RAG，替换当前的 token 加权计数）
-- [ ] 知识图谱大改（按业务视角分层、关键节点高亮、社区演化）
-- [ ] Markdown 编辑器升级（实时预览 / 图片粘贴上传）
-- [ ] 移动端响应式优化
-- [ ] 多警员协作：差异同步、冲突合并
-- [ ] LLM 调用加 tenacity 重试（看 `llm_calls.jsonl` 评估必要性）
-- [ ] 忘记密码（基于注册时填的邮箱发临时码）
+日志位置：
+- 本机 agent：`~/.handynotes/<u>/mjq.log` + `data/llm_calls.jsonl`
+- 云端：`journalctl -u mjq-cloud -f`
+- nginx：`/var/log/nginx/{access,error}.log`
 
 ---
 
-## 鸣谢
+## 11. 路线图
 
-- 产品 / 业务设计:数合云智
-- 前端组件库:Element Plus
-- 图可视化:D3.js
-- 灵感来源:Obsidian 的 [[wiki-link]] 知识网络范式
+### 短期（Web V1.0 之后）
+
+- [ ] 占位页可视化：卡片视图加"待补充"徽章；列表过滤"只看占位"
+- [ ] 修复带 preview：自动补齐前先让用户看 LLM 草稿，确认后再写盘
+- [ ] 健康度公式可视化（可调权重）
+- [ ] agent_key 长期令牌（替换 `MJQ_AGENT_TOKEN` 工程债）
+- [ ] inbox_scan 真正触发入库（当前只数文件）
+- [ ] admin 控制台铺前端（邀请码 / 模板 / 撤销用户）
+- [ ] 真向量检索（embedding-based RAG）
+
+### 中期
+
+- [ ] PostgreSQL 替换云端 JSON 存储
+- [ ] Markdown 实时编辑器（图片粘贴上传 / 实时预览）
+- [ ] 移动端响应式
+- [ ] 多用户协作的 diff/merge
+
+### 长期
+
+- [ ] 桌面端打包（Tauri / Electron 包本机 agent）
+- [ ] 私有化部署一键工具（含 LLM 模型预下载）
+
+---
+
+## 12. 工程原则
+
+代码遵循《工程控制论》范式（详见 `~/.claude/CLAUDE.md` 镜像）：
+
+- **原则 1**：实践是检验唯一标准 —— 每个阶段都有 E2E 验证（92 + 32 通过）
+- **原则 4**：区分技术革新 vs 革命 —— 云本机分离是革命，按重写而非改造规划
+- **原则 5**：先讲清"系统"四要素（边界 / 组成 / 相互制约 / 目标功能）
+- **原则 9**：反馈环最短 —— 单文件 schema、即时心跳、可点击 KPI
+- **原则 12**：稳定性优先于性能 —— 失败兜底先于优化
+- **原则 14**：关键路径必有兜底 —— 云挂了本机仍能跑；LLM 失败 mock 顶上
+
+---
+
+## 13. 鸣谢
+
+- 产品 / 业务设计：数合云智
+- 前端组件库：Element Plus
+- 图可视化：D3.js
+- 调度：APScheduler
+- 灵感来源：Obsidian 的 [[wiki-link]] 知识网络范式
+
+## 14. License
+
+内部项目；外部使用请联系数合云智。
