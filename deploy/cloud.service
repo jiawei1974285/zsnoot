@@ -1,0 +1,33 @@
+[Unit]
+Description=mjq-cloud (zhishu cloud control plane, web v1.0)
+After=network.target
+Documentation=https://github.com/jiawei1974285/zsnoot
+
+[Service]
+Type=simple
+User=mjq
+Group=mjq
+WorkingDirectory=/opt/mjq-handynotes
+EnvironmentFile=/opt/mjq-handynotes/cloud.env
+ExecStart=/opt/mjq-handynotes/.venv/bin/python -m cloud.main
+
+# 进程崩了自动重启；间隔 3s 防止熔断风暴
+Restart=always
+RestartSec=3
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+# 日志走 systemd-journal；查看用 journalctl -u mjq-cloud -f
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mjq-cloud
+
+# 安全收紧（按需开启；首次部署如果遇到权限报错先注释掉再排查）
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/mjq-handynotes/cloud/data /opt/mjq-handynotes/config
+
+[Install]
+WantedBy=multi-user.target
