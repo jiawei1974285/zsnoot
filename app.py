@@ -869,6 +869,7 @@ def api_stats():
         except Exception:
             pass
 
+    today = count_between(PROJECT_DIR, 0, 1)
     week = count_between(PROJECT_DIR, 0, 7)
     last_week = count_between(PROJECT_DIR, 7, 14)
 
@@ -915,6 +916,7 @@ def api_stats():
         'batches': batches_count,
         'ingested_files': ingested_files,
         'by_type': by_type,
+        'today': {a: today.get(a, 0) for a in actions_to_track},
         'this_week': {a: week.get(a, 0) for a in actions_to_track},
         'last_week': {a: last_week.get(a, 0) for a in actions_to_track},
         'period_summary': period_summary,
