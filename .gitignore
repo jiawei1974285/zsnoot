@@ -22,6 +22,7 @@ persons/
 locations/
 laws/
 images/
+!docs/images/
 
 # Generated wiki content (user knowledge base) - keep templates only
 wiki/*
