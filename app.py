@@ -560,6 +560,11 @@ def _apply_local_cors(resp):
         resp.headers['Vary'] = 'Origin'
         resp.headers['Access-Control-Allow-Headers'] = 'Authorization, Content-Type'
         resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        # Chrome Private Network Access (PNA)：公网页面调 127.0.0.1 需要这个头放行
+        # 否则浏览器会在 preflight 阶段静默拦截，前端只会看到 "Failed to fetch"
+        # 见 https://wicg.github.io/private-network-access/
+        if request.headers.get('Access-Control-Request-Private-Network'):
+            resp.headers['Access-Control-Allow-Private-Network'] = 'true'
     return resp
 
 
@@ -569,7 +574,8 @@ def _require_login():
     from flask import g
     path = request.path or ''
 
-    # CORS 预检放行（OPTIONS）
+    # CORS 预检放行（OPTIONS）—— 注意：响应头会由 _apply_local_cors @after_request 自动补全
+    # 包括 Chrome PNA 头（Access-Control-Allow-Private-Network）
     if request.method == 'OPTIONS' and path.startswith('/api/'):
         return ('', 204)
 
