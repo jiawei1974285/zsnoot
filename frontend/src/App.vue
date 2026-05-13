@@ -485,6 +485,26 @@
                     <div style="font-size:32px;opacity:.4">💬</div>
                     <span>当日暂无对话记录</span>
                   </div>
+              <section class="home-panel">
+                <div class="section-title section-title-sm">最近笔记</div>
+                <div class="qa-list">
+                  <button
+                    v-for="note in homeStats.recent_notes || []"
+                    :key="note.slug"
+                    class="qa-row"
+                    @click="openNoteFromHome(note)"
+                  >
+                    <div class="qa-title">{{ note.title }}</div>
+                    <div class="qa-snippet">{{ note.snippet || '（无摘要）' }}</div>
+                    <div class="qa-date">{{ note.updated || note.created }}</div>
+                  </button>
+                  <div v-if="!homeStats.recent_notes?.length" class="detail-item">还没有新建笔记</div>
+                </div>
+              </section>
+
+              <section class="home-panel">
+                <div class="section-title section-title-sm">最近问答</div>
+                <div class="qa-list">
                   <button
                     v-for="qa in calDrawerQA"
                     :key="qa.slug"
