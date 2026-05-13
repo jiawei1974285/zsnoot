@@ -99,9 +99,55 @@ if ($PresetCloudUrl -and $PresetJwt) {
         "# 服务器预置 —— 打包时由 admin 注入，setup.bat 自动读为默认值",
         "MJQ_CLOUD_URL=$PresetCloudUrl",
         "MJQ_JWT_SECRET=$PresetJwt",
-        "MJQ_LOCAL_CORS_ORIGINS=$PresetCloudUrl,http://localhost:5174"
+        "MJQ_LOCAL_CORS_ORIGINS=$PresetCloudUrl,http://localhost:5174,http://localhost:5004"
     ) | Set-Content -Path $PresetPath -Encoding utf8
     Write-Host "  ✓ preset.ini 已注入（云端 $PresetCloudUrl）" -ForegroundColor Green
+}
+
+# 前端 dist 打进 zip（用户从 http://localhost:5004 访问；绕过 Chrome PNA 限制）
+if ($PresetCloudUrl) {
+    Write-Host "[2.5/4] 构建前端到 frontend/dist..." -ForegroundColor Yellow
+    $FrontendSrc = Join-Path $RootDir "frontend"
+    if (Test-Path $FrontendSrc) {
+        Push-Location $FrontendSrc
+        # 临时改 .env.production：本机 agent 自服 SPA，所以 VITE_LOCAL_API 为空（同源），
+        # 只配 VITE_CLOUD_API
+        $envFile = ".env.production"
+        $oldEnv = if (Test-Path $envFile) { Get-Content $envFile -Raw } else { $null }
+        @(
+            "VITE_CLOUD_API=$PresetCloudUrl",
+            "VITE_LOCAL_API="
+        ) | Set-Content -Path $envFile -Encoding utf8
+
+        # 装依赖（如未装）
+        if (-not (Test-Path "node_modules")) {
+            Write-Host "  npm install..." -ForegroundColor White
+            npm install --no-audit --no-fund 2>&1 | Select-Object -Last 2
+        }
+        Write-Host "  npm run build..." -ForegroundColor White
+        # vite 输出 ANSI 染色 + 警告会被 PowerShell 当 stderr，但实际能 build 成功
+        # 不能依赖 $LASTEXITCODE，改为检查 dist/index.html 是否产出
+        & cmd /c "npm run build 2>&1" | Select-Object -Last 3
+        if (-not (Test-Path "dist\index.html")) {
+            Pop-Location
+            Write-Host "  ✗ 前端构建失败 —— dist/index.html 不存在" -ForegroundColor Red
+            exit 1
+        }
+
+        # 还原 .env.production（避免污染开发机）
+        if ($oldEnv) { Set-Content -Path $envFile -Value $oldEnv -Encoding utf8 -NoNewline }
+        else { Remove-Item $envFile -Force }
+        Pop-Location
+
+        # 复制 dist 到包内
+        $distOut = Join-Path $OutDir "frontend\dist"
+        New-Item -ItemType Directory -Force -Path $distOut | Out-Null
+        Copy-Item -Recurse "$FrontendSrc\dist\*" $distOut
+        $distSize = [math]::Round((Get-ChildItem $distOut -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
+        Write-Host "  ✓ 前端 dist 打包完成（$distSize MB）" -ForegroundColor Green
+    } else {
+        Write-Host "  ⚠ frontend/ 不存在，跳过前端打包" -ForegroundColor Yellow
+    }
 }
 
 # ─── 2. 内嵌 Python（bundled 模式） ──────────────────

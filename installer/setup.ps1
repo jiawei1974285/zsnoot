@@ -195,7 +195,11 @@ Write-Host "云端：        $cloudUrl" -ForegroundColor White
 Write-Host ""
 Write-Host "日常使用：" -ForegroundColor Yellow
 Write-Host "  ① 双击桌面 ‘知枢’ 图标 或 start.bat 启动" -ForegroundColor White
-Write-Host "  ② 浏览器打开 $cloudUrl 登录" -ForegroundColor White
+Write-Host "  ② 浏览器会自动打开 http://localhost:5004（注：不是云端 IP）" -ForegroundColor White
+Write-Host "" -ForegroundColor White
+Write-Host "  为什么是 localhost 而不是 $cloudUrl ?" -ForegroundColor Gray
+Write-Host "  - Chrome 安全策略禁止 http 公网页面访问 127.0.0.1" -ForegroundColor Gray
+Write-Host "  - 改从 localhost 加载页面绕开这条限制；体验完全一样" -ForegroundColor Gray
 Write-Host ""
 Write-Host "停止：       双击 stop.bat" -ForegroundColor White
 Write-Host "重新配置：    再跑 setup.bat" -ForegroundColor White
