@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+runtime/
+data/
+raw/
+notes.db
+mjq.log
+mjq.log.*
+*.log
+*.pid
+__pycache__/
+.test-tmp/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+config/secret.key

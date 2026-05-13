@@ -104,7 +104,6 @@ case_refs:
 | 类型 | 目录 | 用途 |
 |------|------|------|
 | type | wiki/type/ | 违法犯罪类型 |
-| organization | wiki/organization/ | 组织机构 |
 
 自定义类型由系统配置生成。LLM 入库时可根据材料语义选择这些类型，并将页面写入对应目录。
 

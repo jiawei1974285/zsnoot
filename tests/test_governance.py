@@ -33,6 +33,23 @@ class GovernanceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.get_json()["error"], "Wiki pages are agent-owned and read-only")
 
+    def test_agent_status_expires_stale_active_state(self):
+        import agent_status
+
+        self._tmp = make_tmp_dir("agent-status")
+        data_dir = self._tmp / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "agent_status.json").write_text(
+            '{"state":"generating","message":"正在生成知识页面 old.md","detail":{},"updated_at":"2026-05-01T08:53:54"}',
+            encoding="utf-8",
+        )
+
+        status = agent_status.get_status(str(self._tmp))
+
+        self.assertEqual(status["state"], "idle")
+        self.assertEqual(status["message"], "空闲")
+        self.assertEqual(status["detail"]["expired_state"], "generating")
+
     def test_agent_owned_wiki_pages_can_still_be_deleted_from_cards(self):
         import app
 
@@ -87,6 +104,36 @@ class GovernanceTests(unittest.TestCase):
         self.assertEqual([page["slug"] for page in pages], ["newer", "older"])
         self.assertEqual(pages[0]["last_imported_at"], "2026-04-30T10:05:00")
         self.assertEqual(pages[0]["last_import_batch_id"], "batch-new")
+
+    def test_stats_include_recent_notes(self):
+        import app
+
+        self._tmp = make_tmp_dir("stats-notes")
+        wiki_dir = self._tmp / "wiki"
+        notes_dir = wiki_dir / "notes"
+        outputs_dir = wiki_dir / "outputs"
+        data_dir = self._tmp / "data"
+        notes_dir.mkdir(parents=True, exist_ok=True)
+        outputs_dir.mkdir(parents=True, exist_ok=True)
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (notes_dir / "older-note.md").write_text(
+            "---\ntitle: Older Note\ncreated: 2026-05-01\n---\n# Older Note\n\nold body",
+            encoding="utf-8",
+        )
+        (notes_dir / "new-note.md").write_text(
+            "---\ntitle: New Note\ncreated: 2026-05-03\n---\n# New Note\n\nnew body",
+            encoding="utf-8",
+        )
+
+        with mock.patch.object(app, "PROJECT_DIR", str(self._tmp)), \
+             mock.patch.object(app, "WIKI_DIR", str(wiki_dir)), \
+             app.app.app_context():
+            response = app.api_stats()
+
+        payload = response.get_json()
+        self.assertEqual(payload["recent_notes"][0]["slug"], "new-note")
+        self.assertEqual(payload["recent_notes"][0]["title"], "New Note")
+        self.assertIn("new body", payload["recent_notes"][0]["snippet"])
 
     def test_auto_saved_qa_uses_unique_output_files(self):
         import app

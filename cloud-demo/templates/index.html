@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>知枢</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        :root {
+            --primary-blue: #0d6efd;
+            --dark-blue: #0a58ca;
+            --light-blue: #e7f1ff;
+        }
+        body { background-color: #f8f9fa; }
+        .header {
+            background: linear-gradient(135deg, var(--dark-blue), var(--primary-blue));
+            color: white; padding: 1.5rem 0; margin-bottom: 2rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .nav-tabs .nav-link { color: var(--dark-blue); font-weight: 500; }
+        .nav-tabs .nav-link.active { color: var(--dark-blue); border-bottom-color: white; }
+        .card { border: none; box-shadow: 0 1px 3px rgba(0,0,0,0.08); transition: transform 0.2s; }
+        .card:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.12); }
+        .badge-type { font-size: 0.75rem; padding: 0.35em 0.65em; }
+        .badge-case { background-color: #dc3545; }
+        .badge-person { background-color: #6f42c1; }
+        .badge-location { background-color: #fd7e14; }
+        .badge-law { background-color: #20c997; }
+        .badge-technique { background-color: #0dcaf0; }
+        .badge-note { background-color: #0d6efd; }
+        .badge-summary { background-color: #6c757d; }
+        .search-box {
+            background: white; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1.5rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+        .wiki-content {
+            background: white; border-radius: 0.5rem; padding: 1.5rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+        .wiki-content h1, .wiki-content h2, .wiki-content h3 { color: var(--dark-blue); }
+        .wikilink {
+            background-color: var(--light-blue); padding: 0.1em 0.3em;
+            border-radius: 3px; color: var(--dark-blue);
+        }
+        .filter-btn { margin: 0.25rem; }
+        .filter-btn.active { background-color: var(--dark-blue); color: white; }
+        .chat-box {
+            background: white; border-radius: 0.5rem; padding: 1.5rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08); min-height: 300px;
+        }
+        .chat-message { margin-bottom: 1rem; padding: 0.75rem; border-radius: 0.5rem; }
+        .chat-user { background-color: var(--light-blue); margin-left: 2rem; }
+        .chat-bot { background-color: #f8f9fa; margin-right: 2rem; }
+        .analysis-status { padding: 0.5rem; border-radius: 0.25rem; font-size: 0.875rem; }
+        .analysis-success { background-color: #d1e7dd; color: #0f5132; }
+        .analysis-error { background-color: #f8d7da; color: #842029; }
+        .loading-spinner {
+            display: inline-block; width: 1rem; height: 1rem;
+            border: 2px solid currentColor; border-right-color: transparent;
+            border-radius: 50%; animation: spinner 0.75s linear infinite;
+        }
+        @keyframes spinner { to { transform: rotate(360deg); } }
+        
+        /* 知识图谱样式 */
+        #graph-container {
+            background: white; border-radius: 0.5rem; padding: 1rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+        #graph-svg { width: 100%; height: 500px; border: 1px solid #dee2e6; border-radius: 0.25rem; }
+        .graph-node { stroke: #fff; stroke-width: 2px; cursor: pointer; }
+        .graph-node:hover { stroke: #0d6efd; stroke-width: 3px; }
+        .graph-link { stroke: #999; stroke-opacity: 0.6; }
+        .graph-label { font-size: 12px; fill: #333; pointer-events: none; }
+        
+        /* 串并案分析样式 */
+        .similarity-bar {
+            height: 8px; border-radius: 4px; background-color: #e9ecef;
+        }
+        .similarity-fill {
+            height: 100%; border-radius: 4px; transition: width 0.3s;
+        }
+        .similarity-high { background-color: #dc3545; }
+        .similarity-medium { background-color: #fd7e14; }
+        .similarity-low { background-color: #20c997; }
+        
+        /* Lint 样式 */
+        .lint-item {
+            padding: 0.75rem; border-radius: 0.25rem; margin-bottom: 0.5rem;
+        }
+        .lint-warning { background-color: #fff3cd; border-left: 4px solid #ffc107; }
+        .lint-info { background-color: #d1ecf1; border-left: 4px solid #0dcaf0; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="container">
+            <h1>知枢</h1>
+            <p class="mb-0">本地知识中枢 - Phase 3 (知识图谱 + 串并案分析)</p>
+        </div>
+    </div>
+
+    <div class="container">
+        <ul class="nav nav-tabs mb-3" id="mainTabs" role="tablist">
+            <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#createTab">✏️ 新建笔记</button></li>
+            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#wikiTab">📚 知识库</button></li>
+            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#graphTab">🕸️ 知识图谱</button></li>
+            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#caseTab">🔍 串并案分析</button></li>
+            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#chatTab">💬 对话查询</button></li>
+            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#lintTab">🔧 维护检查</button></li>
+            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#configTab">⚙️ 系统配置</button></li>
+        </ul>
+
+        <div class="tab-content">
+            <!-- 新建笔记 -->
+            <div class="tab-pane fade show active" id="createTab">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-body">
+                                <h5 class="card-title">新建笔记</h5>
+                                <form id="noteForm">
+                                    <div class="mb-3">
+                                        <label class="form-label">标题</label>
+                                        <input type="text" class="form-control" id="noteTitle" placeholder="例如：XX小区盗窃案" required>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">内容</label>
+                                        <textarea class="form-control" id="noteContent" rows="6" placeholder="记录案件详情、巡逻发现、工作笔记..." required></textarea>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">标签（逗号分隔）</label>
+                                        <input type="text" class="form-control" id="noteTags" placeholder="盗窃，XX小区，视频追踪">
+                                    </div>
+                                    <div class="mb-3 form-check">
+                                        <input type="checkbox" class="form-check-input" id="autoAnalyze" checked>
+                                        <label class="form-check-label" for="autoAnalyze">自动 LLM 分析（提取实体、生成 Wiki 页面）</label>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary" id="submitBtn">💾 保存笔记</button>
+                                </form>
+                                <div id="analysisResult" class="mt-3" style="display: none;"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-body">
+                                <h5 class="card-title">最近笔记</h5>
+                                <div id="notesList"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 知识库 -->
+            <div class="tab-pane fade" id="wikiTab">
+                <div class="mb-3">
+                    <button class="btn btn-outline-primary filter-btn active" onclick="filterByType('all', this)">全部</button>
+                    <button class="btn btn-outline-danger filter-btn" onclick="filterByType('cases', this)">🔴 案件</button>
+                    <button class="btn btn-outline-primary filter-btn" onclick="filterByType('persons', this)">🟣 人物</button>
+                    <button class="btn btn-outline-warning filter-btn" onclick="filterByType('locations', this)">🟠 地点</button>
+                    <button class="btn btn-outline-success filter-btn" onclick="filterByType('laws', this)">🟢 法规</button>
+                    <button class="btn btn-outline-info filter-btn" onclick="filterByType('techniques', this)">🔵 技战法</button>
+                    <button class="btn btn-outline-primary filter-btn" onclick="filterByType('notes', this)">🔷 笔记</button>
+                    <button class="btn btn-outline-secondary filter-btn" onclick="filterByType('summaries', this)">⚫ 研判</button>
+                </div>
+                <div id="wikiPagesList"></div>
+            </div>
+
+            <!-- 知识图谱 -->
+            <div class="tab-pane fade" id="graphTab">
+                <div id="graph-container">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h5 class="mb-0">🕸️ 知识图谱</h5>
+                        <button class="btn btn-sm btn-outline-primary" onclick="loadGraph()">🔄 刷新</button>
+                    </div>
+                    <svg id="graph-svg"></svg>
+                    <div id="graph-legend" class="mt-3"></div>
+                </div>
+            </div>
+
+            <!-- 串并案分析 -->
+            <div class="tab-pane fade" id="caseTab">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">🔍 串并案分析</h5>
+                        <p class="text-muted">基于案件相似度自动发现串并案线索</p>
+                        <div id="casesList"></div>
+                        <div id="caseAnalysis" class="mt-4" style="display: none;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 对话查询 -->
+            <div class="tab-pane fade" id="chatTab">
+                <div class="chat-box">
+                    <div id="chatMessages">
+                        <div class="chat-message chat-bot">
+                            <strong>🤖 知识库助手：</strong><br>
+                            您好！我是警务知识库助手。您可以问我关于案件、人物、地点、法规等问题。
+                        </div>
+                    </div>
+                    <div class="input-group mt-3">
+                        <input type="text" class="form-control" id="chatInput" placeholder="输入您的问题..." onkeypress="if(event.key==='Enter') sendChat()">
+                        <button class="btn btn-primary" onclick="sendChat()">发送</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 维护检查 -->
+            <div class="tab-pane fade" id="lintTab">
+                <div class="card">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h5 class="mb-0">🔧 知识库维护检查</h5>
+                            <div>
+                                <button class="btn btn-sm btn-outline-primary me-2" onclick="runLint()">🔄 运行检查</button>
+                                <button class="btn btn-sm btn-outline-success" onclick="runLintAndFix()">🔧 运行并修复</button>
+                            </div>
+                        </div>
+                        <div id="lintResults"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 系统配置 -->
+            <div class="tab-pane fade" id="configTab">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">⚙️ 系统配置</h5>
+                        <div id="configContent">
+                            <div class="text-center"><span class="loading-spinner"></span> 加载中...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let currentFilter = 'all';
+
+        // 加载笔记列表
+        async function loadNotes() {
+            const response = await fetch('/api/notes');
+            const notes = await response.json();
+            const notesDiv = document.getElementById('notesList');
+            notesDiv.innerHTML = notes.slice(0, 10).map(note => `
+                <div class="card mb-2">
+                    <div class="card-body py-2">
+                        <h6 class="card-title mb-1">${note.title}</h6>
+                        <p class="card-text small mb-1">${note.body_preview || note.content || ''}</p>
+                        <small class="text-muted">${note.created || note.created_at || ''}</small>
+                    </div>
+                </div>
+            `).join('') || '<p class="text-muted">暂无笔记</p>';
+        }
+
+        // 加载 Wiki 页面列表
+        async function loadWikiPages(type = 'all') {
+            const url = type === 'all' ? '/api/wiki/pages' : `/api/wiki/pages?type=${type}`;
+            const response = await fetch(url);
+            const pages = await response.json();
+            const pagesDiv = document.getElementById('wikiPagesList');
+            
+            const typeLabels = {
+                cases: '案件', persons: '人物', locations: '地点',
+                laws: '法规', techniques: '技战法', notes: '笔记', summaries: '研判'
+            };
+            
+            pagesDiv.innerHTML = pages.map(page => `
+                <div class="card mb-2">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <span class="badge badge-type badge-${page.type}">${typeLabels[page.type] || page.type}</span>
+                                <h6 class="d-inline ms-2">${page.title}</h6>
+                                <p class="text-muted small mb-1">${page.body_preview || ''}</p>
+                                <small class="text-muted">
+                                    ${page.created ? '📅 ' + page.created : ''}
+                                    ${page.tags && page.tags.length ? ' | 🏷️ ' + page.tags.join(', ') : ''}
+                                </small>
+                            </div>
+                            <button class="btn btn-sm btn-outline-primary" onclick="viewPageBySlug('${page.slug}', '${page.type}')">查看</button>
+                        </div>
+                    </div>
+                </div>
+            `).join('') || '<p class="text-muted">暂无页面</p>';
+        }
+
+        function filterByType(type, btn) {
+            currentFilter = type;
+            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            loadWikiPages(type);
+        }
+
+        async function viewPageBySlug(slug, type) {
+            alert(`查看页面：${slug}`);
+        }
+
+        // 对话查询
+        async function sendChat() {
+            const input = document.getElementById('chatInput');
+            const query = input.value.trim();
+            if (!query) return;
+            
+            const messagesDiv = document.getElementById('chatMessages');
+            messagesDiv.innerHTML += `<div class="chat-message chat-user"><strong>👤 您：</strong><br>${query}</div>`;
+            
+            const loadingId = 'loading-' + Date.now();
+            messagesDiv.innerHTML += `<div class="chat-message chat-bot" id="${loadingId}"><strong>🤖 知识库助手：</strong><br><span class="loading-spinner"></span> 正在查询知识库...</div>`;
+            input.value = '';
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({query})
+                });
+                const data = await response.json();
+                const loadingEl = document.getElementById(loadingId);
+                if (loadingEl) {
+                    let html = `<strong>🤖 知识库助手：</strong><br>${data.response}`;
+                    if (data.sources && data.sources.length) {
+                        html += `<br><small class="text-muted">📚 参考来源：${data.sources.map(s => s.title).join(', ')}</small>`;
+                    }
+                    loadingEl.innerHTML = html;
+                }
+            } catch (error) {
+                const loadingEl = document.getElementById(loadingId);
+                if (loadingEl) {
+                    loadingEl.innerHTML = `<strong>🤖 知识库助手：</strong><br><span class="text-danger">抱歉，查询失败：${error.message}</span>`;
+                }
+            }
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // 提交笔记
+        document.getElementById('noteForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const title = document.getElementById('noteTitle').value;
+            const content = document.getElementById('noteContent').value;
+            const tagsStr = document.getElementById('noteTags').value;
+            const tags = tagsStr ? tagsStr.split(',').map(t => t.trim()).filter(t => t) : [];
+            const autoAnalyze = document.getElementById('autoAnalyze').checked;
+            
+            const submitBtn = document.getElementById('submitBtn');
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<span class="loading-spinner"></span> 保存中...';
+            
+            const analysisResult = document.getElementById('analysisResult');
+            analysisResult.style.display = 'block';
+            analysisResult.innerHTML = '<div class="analysis-status analysis-success">💾 保存笔记中...</div>';
+            
+            try {
+                const response = await fetch('/api/notes', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({title, content, tags, auto_analyze: autoAnalyze})
+                });
+                const data = await response.json();
+                
+                if (data.analysis) {
+                    const analysis = data.analysis;
+                    if (analysis.status === 'success') {
+                        analysisResult.innerHTML = `<div class="analysis-status analysis-success">✅ ${analysis.message}<br><small>生成的文件：${analysis.generated_files.join(', ')}</small></div>`;
+                    } else if (analysis.status === 'error') {
+                        analysisResult.innerHTML = `<div class="analysis-status analysis-error">⚠️ 分析失败：${analysis.message}<br><small>笔记已保存，但 LLM 分析未成功</small></div>`;
+                    }
+                } else {
+                    analysisResult.innerHTML = '<div class="analysis-status analysis-success">✅ 笔记已保存（LLM 分析未启用）</div>';
+                }
+                
+                document.getElementById('noteForm').reset();
+                loadNotes();
+                loadWikiPages(currentFilter);
+            } catch (error) {
+                analysisResult.innerHTML = `<div class="analysis-status analysis-error">❌ 保存失败：${error.message}</div>`;
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '💾 保存笔记';
+            }
+        });
+
+        // ==================== 知识图谱 ====================
+        const typeColors = {
+            cases: '#dc3545',
+            persons: '#6f42c1',
+            locations: '#fd7e14',
+            laws: '#20c997',
+            techniques: '#0dcaf0',
+            notes: '#0d6efd',
+            summaries: '#6c757d'
+        };
+
+        const communityColors = ['#e74c3c33', '#3498db33', '#2ecc7133', '#f39c1233', '#9b59b633'];
+        let currentGraphData = null;
+        let isMerged = false;
+
+        async function loadGraph(merged = false) {
+            const svg = d3.select('#graph-svg');
+            svg.selectAll('*').remove();
+            
+            try {
+                const url = merged ? '/api/graph/merged' : '/api/graph';
+                const response = await fetch(url);
+                const graphData = await response.json();
+                currentGraphData = graphData;
+                isMerged = merged;
+                
+                const width = document.getElementById('graph-svg').clientWidth;
+                const height = 500;
+                
+                // 社区聚类力
+                const clusterForce = d3.forceCenter().strength(0);
+                
+                const simulation = d3.forceSimulation(graphData.nodes)
+                    .force('link', d3.forceLink(graphData.edges).id(d => d.id).distance(80))
+                    .force('charge', d3.forceManyBody().strength(-300))
+                    .force('center', d3.forceCenter(width / 2, height / 2))
+                    .force('collision', d3.forceCollide().radius(d => Math.max(15, Math.min(30, d.linkCount * 3)) + 10));
+                
+                // 绘制社区背景区域
+                const communities = {};
+                graphData.nodes.forEach(n => {
+                    const comm = n.community || 0;
+                    if (!communities[comm]) communities[comm] = [];
+                    communities[comm].push(n);
+                });
+                
+                // 绘制社区聚类
+                const clusterGroup = svg.append('g').attr('class', 'clusters');
+                
+                simulation.on('tick', () => {
+                    // 更新社区聚类位置
+                    Object.entries(communities).forEach(([commId, nodes]) => {
+                        if (nodes.length > 1) {
+                            const cx = d3.mean(nodes, n => n.x);
+                            const cy = d3.mean(nodes, n => n.y);
+                            const radius = d3.max(nodes, n => Math.sqrt(Math.pow(n.x - cx, 2) + Math.pow(n.y - cy, 2))) + 30;
+                            
+                            let circle = clusterGroup.select(`.cluster-${commId}`);
+                            if (circle.empty()) {
+                                circle = clusterGroup.append('circle')
+                                    .attr('class', `cluster-${commId}`)
+                                    .attr('fill', communityColors[parseInt(commId) % communityColors.length])
+                                    .attr('stroke', 'none')
+                                    .attr('opacity', merged ? 0.6 : 0.3);
+                            }
+                            circle
+                                .attr('cx', cx || width / 2)
+                                .attr('cy', cy || height / 2)
+                                .attr('r', radius || 50);
+                        }
+                    });
+                    
+                    link
+                        .attr('x1', d => d.source.x)
+                        .attr('y1', d => d.source.y)
+                        .attr('x2', d => d.target.x)
+                        .attr('y2', d => d.target.y);
+                    
+                    node
+                        .attr('cx', d => d.x)
+                        .attr('cy', d => d.y);
+                    
+                    label
+                        .attr('x', d => d.x)
+                        .attr('y', d => d.y - 15);
+                });
+                
+                // 绘制边
+                const link = svg.append('g')
+                    .attr('class', 'links')
+                    .selectAll('line')
+                    .data(graphData.edges)
+                    .join('line')
+                    .attr('class', 'graph-link')
+                    .attr('stroke-width', d => Math.max(1, d.weight));
+                
+                // 绘制节点
+                const node = svg.append('g')
+                    .attr('class', 'nodes')
+                    .selectAll('circle')
+                    .data(graphData.nodes)
+                    .join('circle')
+                    .attr('class', d => `graph-node ${d.isMerged ? 'merged-node' : ''}`)
+                    .attr('r', d => {
+                        const base = Math.max(10, Math.min(25, d.linkCount * 3));
+                        return d.isMerged ? base * 1.3 : base;
+                    })
+                    .attr('fill', d => {
+                        if (d.isMerged) return '#e74c3c';
+                        return typeColors[d.type] || '#999';
+                    })
+                    .attr('stroke', d => d.isMerged ? '#c0392b' : '#fff')
+                    .attr('stroke-width', d => d.isMerged ? 3 : 2)
+                    .style('cursor', 'pointer')
+                    .call(d3.drag()
+                        .on('start', (event, d) => { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+                        .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
+                        .on('end', (event, d) => { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }))
+                    .on('click', (event, d) => {
+                        if (d.isMerged && d.members) {
+                            alert(`合并节点包含：\n${d.members.map(m => graphData.nodes.find(n => n.id === m)?.label || m).join('\n')}`);
+                        }
+                    });
+                
+                // 添加脉冲动画（合并节点）
+                node.filter(d => d.isMerged)
+                    .transition()
+                    .duration(1000)
+                    .attr('r', d => Math.max(10, Math.min(25, d.linkCount * 3)) * 1.5)
+                    .transition()
+                    .duration(1000)
+                    .attr('r', d => Math.max(10, Math.min(25, d.linkCount * 3)) * 1.3)
+                    .on('end', function repeat() {
+                        d3.select(this)
+                            .transition().duration(1000)
+                            .attr('r', d => Math.max(10, Math.min(25, d.linkCount * 3)) * 1.5)
+                            .transition().duration(1000)
+                            .attr('r', d => Math.max(10, Math.min(25, d.linkCount * 3)) * 1.3)
+                            .on('end', repeat);
+                    });
+                
+                // 绘制标签
+                const label = svg.append('g')
+                    .attr('class', 'labels')
+                    .selectAll('text')
+                    .data(graphData.nodes)
+                    .join('text')
+                    .attr('class', 'graph-label')
+                    .attr('font-size', d => d.isMerged ? '14px' : '12px')
+                    .attr('font-weight', d => d.isMerged ? 'bold' : 'normal')
+                    .text(d => {
+                        if (d.isMerged) {
+                            // 合并节点显示核心标签
+                            return d.label.split(' + ')[0];
+                        }
+                        return d.label;
+                    });
+                
+                // 图例
+                const legendDiv = document.getElementById('graph-legend');
+                const statusText = merged ? '🔀 已合并模式' : '📊 原始模式';
+                legendDiv.innerHTML = `
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <strong>${statusText}</strong>
+                            <span class="ms-3">节点：${graphData.nodes.length} | 边：${graphData.edges.length} | 社区：${graphData.communities?.length || 0}</span>
+                        </div>
+                        <div>
+                            ${!merged ? 
+                                '<button class="btn btn-sm btn-danger ms-2" onclick="loadGraph(true)">🔀 自动合并节点</button>' :
+                                '<button class="btn btn-sm btn-outline-primary ms-2" onclick="loadGraph(false)">📊 显示原始</button>'
+                            }
+                        </div>
+                    </div>
+                    <div class="mt-2">
+                        ${Object.entries(typeColors).map(([type, color]) => 
+                            `<span style="display: inline-block; margin-right: 15px;"><span style="display: inline-block; width: 12px; height: 12px; border-radius: 50%; background-color: ${color}; margin-right: 5px;"></span>${type}</span>`
+                        ).join('')}
+                        <span style="display: inline-block; margin-left: 15px;"><span style="display: inline-block; width: 12px; height: 12px; border-radius: 50%; background-color: #e74c3c; margin-right: 5px;"></span>合并节点</span>
+                    </div>
+                `;
+                
+            } catch (error) {
+                console.error('加载知识图谱失败:', error);
+            }
+        }
+
+        // ==================== 串并案分析 ====================
+        async function loadCases() {
+            const response = await fetch('/api/cases');
+            const cases = await response.json();
+            const casesDiv = document.getElementById('casesList');
+            
+            if (cases.length === 0) {
+                casesDiv.innerHTML = '<p class="text-muted">暂无案件数据</p>';
+                return;
+            }
+            
+            casesDiv.innerHTML = cases.map(c => `
+                <div class="card mb-2">
+                    <div class="card-body">
+                        <h6>${c.title}</h6>
+                        <p class="text-muted small mb-2">${c.body_preview || ''}</p>
+                        <button class="btn btn-sm btn-outline-primary" onclick="analyzeCase('${c.slug}')">🔍 分析串并案</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function analyzeCase(slug) {
+            const analysisDiv = document.getElementById('caseAnalysis');
+            analysisDiv.style.display = 'block';
+            analysisDiv.innerHTML = '<div class="text-center"><span class="loading-spinner"></span> 正在分析...</div>';
+            
+            try {
+                const response = await fetch(`/api/cases/${slug}/related`);
+                const related = await response.json();
+                
+                if (related.length === 0) {
+                    analysisDiv.innerHTML = '<p class="text-muted">未发现相关案件</p>';
+                    return;
+                }
+                
+                analysisDiv.innerHTML = `<h6>🔍 串并案分析结果</h6>` + related.map(r => {
+                    const simClass = r.similarity >= 0.8 ? 'similarity-high' : r.similarity >= 0.6 ? 'similarity-medium' : 'similarity-low';
+                    return `
+                        <div class="card mb-2">
+                            <div class="card-body">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <h6 class="mb-1">${r.case_title}</h6>
+                                    <span class="badge bg-${r.similarity >= 0.8 ? 'danger' : r.similarity >= 0.6 ? 'warning' : 'success'}">${(r.similarity * 100).toFixed(0)}%</span>
+                                </div>
+                                <div class="similarity-bar mb-2">
+                                    <div class="similarity-fill ${simClass}" style="width: ${r.similarity * 100}%"></div>
+                                </div>
+                                <div class="row small">
+                                    <div class="col-3">📍 地点：${(r.factors.location * 100).toFixed(0)}%</div>
+                                    <div class="col-3">🔧 手法：${(r.factors.method * 100).toFixed(0)}%</div>
+                                    <div class="col-3">👤 嫌疑人：${(r.factors.suspect * 100).toFixed(0)}%</div>
+                                    <div class="col-3">📅 时间：${(r.factors.time * 100).toFixed(0)}%</div>
+                                </div>
+                                <p class="text-muted small mb-0 mt-2">💡 ${r.suggestion}</p>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+                
+            } catch (error) {
+                analysisDiv.innerHTML = `<div class="alert alert-danger">分析失败：${error.message}</div>`;
+            }
+        }
+
+        // ==================== 维护检查 ====================
+        async function runLint() {
+            const resultsDiv = document.getElementById('lintResults');
+            resultsDiv.innerHTML = '<div class="text-center"><span class="loading-spinner"></span> 正在检查...</div>';
+            
+            try {
+                const response = await fetch('/api/lint');
+                const lint = await response.json();
+                
+                let html = '';
+                
+                // 建议
+                if (lint.suggestions && lint.suggestions.length) {
+                    html += '<h6>📋 检查建议</h6>';
+                    lint.suggestions.forEach(s => {
+                        html += `<div class="lint-item lint-info">${s}</div>`;
+                    });
+                }
+                
+                // 孤立页面
+                if (lint.orphan_pages && lint.orphan_pages.length) {
+                    html += `<h6 class="mt-3">📄 孤立页面（${lint.orphan_pages.length} 个）</h6>`;
+                    lint.orphan_pages.forEach(p => {
+                        html += `<div class="lint-item lint-warning">${p.title} (${p.type})</div>`;
+                    });
+                }
+                
+                // 断链
+                if (lint.broken_links && lint.broken_links.length) {
+                    html += `<h6 class="mt-3">🔗 断链（${lint.broken_links.length} 个）</h6>`;
+                    lint.broken_links.forEach(l => {
+                        html += `<div class="lint-item lint-warning">[[${l.to}]] 在 ${l.from} 中断裂</div>`;
+                    });
+                }
+                
+                // 过期页面
+                if (lint.stale_pages && lint.stale_pages.length) {
+                    html += `<h6 class="mt-3">⏰ 过期页面（${lint.stale_pages.length} 个）</h6>`;
+                    lint.stale_pages.forEach(p => {
+                        html += `<div class="lint-item lint-info">${p.title}（最后更新：${p.last_updated}）</div>`;
+                    });
+                }
+                
+                if (!html) {
+                    html = '<div class="alert alert-success">✅ 知识库状态良好，无需维护</div>';
+                }
+                
+                resultsDiv.innerHTML = html;
+                
+            } catch (error) {
+                resultsDiv.innerHTML = `<div class="alert alert-danger">检查失败：${error.message}</div>`;
+            }
+        }
+
+        async function runLintAndFix() {
+            const resultsDiv = document.getElementById('lintResults');
+            resultsDiv.innerHTML = '<div class="text-center"><span class="loading-spinner"></span> 正在检查并修复...</div>';
+            
+            try {
+                const response = await fetch('/api/lint/run', { method: 'POST' });
+                const result = await response.json();
+                
+                let html = '<h6>🔧 修复结果</h6>';
+                
+                if (result.fixed && result.fixed.length) {
+                    html += `<div class="alert alert-success">✅ 已修复 ${result.fixed.length} 个问题</div>`;
+                }
+                
+                if (result.stale && result.stale.length) {
+                    html += `<div class="alert alert-warning">⏰ 发现 ${result.stale.length} 个过期页面</div>`;
+                }
+                
+                if (result.suggestions && result.suggestions.length) {
+                    html += '<h6 class="mt-3">📋 建议</h6>';
+                    result.suggestions.forEach(s => {
+                        html += `<div class="lint-item lint-info">${s}</div>`;
+                    });
+                }
+                
+                resultsDiv.innerHTML = html;
+                
+            } catch (error) {
+                resultsDiv.innerHTML = `<div class="alert alert-danger">修复失败：${error.message}</div>`;
+            }
+        }
+
+        async function loadConfig() {
+            const configDiv = document.getElementById('configContent');
+            configDiv.innerHTML = '<div class="text-center"><span class="loading-spinner"></span> 加载中...</div>';
+            
+            try {
+                const response = await fetch('/api/config');
+                const config = await response.json();
+                
+                let html = `
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h6>📊 系统信息</h6>
+                            <table class="table table-sm">
+                                <tr><td>LLM 提供商</td><td>${config.llm?.provider || '未配置'}</td></tr>
+                                <tr><td>LLM 模型</td><td>${config.llm?.model || '未配置'}</td></tr>
+                                <tr><td>向量检索</td><td>${config.embedding?.enabled ? '✅ 启用' : '❌ 禁用'}</td></tr>
+                                <tr><td>自动双向链接</td><td>${config.wiki?.auto_wikilink ? '✅ 启用' : '❌ 禁用'}</td></tr>
+                                <tr><td>自动提取实体</td><td>${config.wiki?.auto_extract ? '✅ 启用' : '❌ 禁用'}</td></tr>
+                            </table>
+                        </div>
+                        <div class="col-md-6">
+                            <h6>📁 目录结构</h6>
+                            <table class="table table-sm">
+                                <tr><td>知识库目录</td><td>${config.wiki?.wiki_dir || '未配置'}</td></tr>
+                                <tr><td>向量库目录</td><td>${config.wiki?.embeddings_dir || '未配置'}</td></tr>
+                                <tr><td>文件监控目录</td><td>${config.watcher?.inbox_dir || '未配置'}</td></tr>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="mt-3">
+                        <button class="btn btn-sm btn-outline-primary" onclick="testConnection()">🔗 测试连接</button>
+                        <button class="btn btn-sm btn-outline-success ms-2" onclick="rebuildVectorStore()">🔄 重建向量库</button>
+                    </div>
+                `;
+                
+                configDiv.innerHTML = html;
+                
+            } catch (error) {
+                configDiv.innerHTML = `<div class="alert alert-danger">加载配置失败：${error.message}</div>`;
+            }
+        }
+
+        async function testConnection() {
+            alert('正在测试 LLM 连接...');
+            // TODO: 实现连接测试
+        }
+
+        async function rebuildVectorStore() {
+            alert('正在重建向量库...');
+            // TODO: 实现向量库重建
+        }
+
+        // 初始化
+        loadNotes();
+        loadWikiPages();
+        
+        // 切换到对应标签页时加载数据
+        document.querySelector('[data-bs-target="#graphTab"]').addEventListener('shown.bs.tab', loadGraph);
+        document.querySelector('[data-bs-target="#caseTab"]').addEventListener('shown.bs.tab', loadCases);
+        document.querySelector('[data-bs-target="#lintTab"]').addEventListener('shown.bs.tab', runLint);
+        document.querySelector('[data-bs-target="#configTab"]').addEventListener('shown.bs.tab', loadConfig);
+    </script>
+</body>
+</html>

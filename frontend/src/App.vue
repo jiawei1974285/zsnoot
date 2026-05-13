@@ -233,7 +233,7 @@
         <header class="topbar">
           <div></div>
           <div class="topbar-status">
-            <div class="status-pill agent-status-pill" :class="agentStatusClass">
+            <div class="status-pill agent-status-pill" :class="agentStatusClass" :title="agentStatusLabel">
               <span class="status-label">智能体</span>
               <strong>{{ agentStatusLabel }}</strong>
             </div>
@@ -262,128 +262,250 @@
 
         <section class="content-surface">
           <template v-if="activeView === 'home'">
-            <div class="section-header">
+            <!-- ── 页头 ── -->
+            <div class="home-page-header">
               <div>
                 <div class="section-title">首页</div>
-                <div class="section-caption">本地知识库一览：入库与活跃情况、实体分布、最近问答、常见问题。</div>
+                <div class="section-caption">{{ homeGreeting }}，{{ currentUser || '警官' }} · 知识库动态一览</div>
               </div>
-              <el-button :icon="Refresh" @click="refreshAll">刷新</el-button>
-            </div>
-
-            <!-- KPI 大字行 -->
-            <div class="dashboard-kpi-row">
-              <div class="kpi-card">
-                <div class="kpi-label">入库文件</div>
-                <div class="kpi-value">{{ homeStats.ingested_files || 0 }}</div>
-                <div class="kpi-sub">{{ homeStats.batches || 0 }} 个批次</div>
-              </div>
-              <div class="kpi-card">
-                <div class="kpi-label">知识卡片</div>
-                <div class="kpi-value">{{ homeStats.pages || 0 }}</div>
-                <div class="kpi-sub">分布在 {{ Object.keys(homeStats.by_type || {}).length }} 类目录</div>
-              </div>
-              <div class="kpi-card">
-                <div class="kpi-label">实体总数</div>
-                <div class="kpi-value">{{ entityTotal }}</div>
-                <div class="kpi-sub">
-                  <template v-for="(n, t, idx) in homeStats.by_type" :key="t">
-                    <span v-if="idx < 3">{{ typeLabel(t) }} {{ n }}<span v-if="idx < 2">·</span></span>
-                  </template>
+              <div class="home-header-actions">
+                <div v-if="staleCount > 0" class="home-stale-badge" @click="setActiveView('ingest')">
+                  ⚠ {{ staleCount }} 个页面待精炼
                 </div>
-              </div>
-              <div class="kpi-card">
-                <div class="kpi-label">本周对话</div>
-                <div class="kpi-value">{{ homeStats.this_week?.chat || 0 }}</div>
-                <div class="kpi-sub">
-                  <span v-if="weekDelta.chat > 0" class="kpi-delta-up">↑ 比上周 +{{ weekDelta.chat }}</span>
-                  <span v-else-if="weekDelta.chat < 0" class="kpi-delta-down">↓ 比上周 {{ weekDelta.chat }}</span>
-                  <span v-else>与上周持平</span>
-                </div>
+                <el-button :icon="Refresh" @click="refreshAll">刷新</el-button>
               </div>
             </div>
 
-            <!-- 图表区 -->
-            <div class="dashboard-charts">
-              <section class="dashboard-chart-card">
-                <v-chart class="dashboard-chart" :option="dailyTrendOption" autoresize />
-              </section>
-              <section class="dashboard-chart-card dashboard-chart-narrow">
-                <v-chart v-if="entityTotal > 0" class="dashboard-chart" :option="typeDistributionOption" autoresize />
-                <div v-else class="dashboard-chart-empty">
-                  <el-icon><Box /></el-icon>
-                  <div>还没有任何实体页面，先去上传材料吧</div>
-                </div>
-              </section>
-            </div>
+            <div class="home-body-grid">
+              <!-- ══ 左列 ══ -->
+              <div class="home-left-col">
 
-            <!-- 列表区 -->
-            <div class="home-overview">
-              <section class="home-panel">
-                <div class="section-title section-title-sm">最近添加批次</div>
-                <div class="batch-list compact">
-                  <button
-                    v-for="batch in recentBatches"
-                    :key="batch.id"
-                    class="batch-row"
-                    @click="openRecentBatch(batch)"
-                  >
-                    <span class="batch-status-dot" :class="statusType(batch.status)"></span>
-                    <span class="batch-name">{{ summarizeBatchTitle(batch) }}</span>
-                    <span class="batch-date">{{ formatTime(batch.created_at) }}</span>
-                    <el-tag size="small" :type="statusType(batch.status)">{{ statusLabel(batch.status) }}</el-tag>
+                <!-- 快捷操作 -->
+                <div class="home-action-grid">
+                  <button class="home-action-card primary" @click="setActiveView('ingest')">
+                    <div class="home-action-icon blue">📥</div>
+                    <strong>入库材料</strong>
+                    <span>上传文件，LLM 自动整理</span>
                   </button>
-                  <div v-if="!recentBatches.length" class="detail-item">还没有入库记录</div>
-                </div>
-              </section>
-
-              <section class="home-panel">
-                <div class="section-title section-title-sm">最近笔记</div>
-                <div class="qa-list">
-                  <button
-                    v-for="note in homeStats.recent_notes || []"
-                    :key="note.slug"
-                    class="qa-row"
-                    @click="openNoteFromHome(note)"
-                  >
-                    <div class="qa-title">{{ note.title }}</div>
-                    <div class="qa-snippet">{{ note.snippet || '（无摘要）' }}</div>
-                    <div class="qa-date">{{ note.updated || note.created }}</div>
+                  <button class="home-action-card" @click="openNoteDialog">
+                    <div class="home-action-icon green">✏️</div>
+                    <strong>新建笔记</strong>
+                    <span>随手记，系统自动结构化</span>
                   </button>
-                  <div v-if="!homeStats.recent_notes?.length" class="detail-item">还没有新建笔记</div>
+                  <button class="home-action-card" @click="setActiveView('chat')">
+                    <div class="home-action-icon purple">💬</div>
+                    <strong>对话查询</strong>
+                    <span>自然语言检索知识库</span>
+                  </button>
+                  <button class="home-action-card" @click="setActiveView('graph')">
+                    <div class="home-action-icon amber">🕸️</div>
+                    <strong>知识图谱</strong>
+                    <span>查看实体关联网络</span>
+                  </button>
                 </div>
-              </section>
 
-              <section class="home-panel">
-                <div class="section-title section-title-sm">最近问答</div>
-                <div class="qa-list">
+                <!-- KPI 六格 -->
+                <div class="home-kpi-grid">
+                  <!-- 入库文件 -->
+                  <div class="home-kpi-card">
+                    <div class="home-kpi-header">
+                      <span class="home-kpi-label">入库文件</span>
+                      <span v-if="weekDelta.ingest > 0" class="home-kpi-delta up">+{{ weekDelta.ingest }}</span>
+                      <span v-else-if="weekDelta.ingest < 0" class="home-kpi-delta down">{{ weekDelta.ingest }}</span>
+                    </div>
+                    <div class="home-kpi-value">{{ homeStats.ingested_files || 0 }}</div>
+                    <div class="home-kpi-sub">{{ homeStats.batches || 0 }} 个批次</div>
+                    <svg class="home-kpi-spark" viewBox="0 0 120 28" preserveAspectRatio="none">
+                      <polyline :points="sparkPoints(homeStats.daily_activity, 'ingest')" fill="none" stroke="#3b82f6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </div>
+                  <!-- 知识卡片 -->
+                  <div class="home-kpi-card">
+                    <div class="home-kpi-header">
+                      <span class="home-kpi-label">知识卡片</span>
+                    </div>
+                    <div class="home-kpi-value">{{ homeStats.pages || 0 }}</div>
+                    <div class="home-kpi-sub">
+                      <template v-for="(n, t, idx) in homeStats.by_type" :key="t">
+                        <span v-if="idx < 3">{{ typeLabel(t) }} {{ n }}<span v-if="idx < 2"> · </span></span>
+                      </template>
+                    </div>
+                    <svg class="home-kpi-spark" viewBox="0 0 120 28" preserveAspectRatio="none">
+                      <polyline :points="sparkPoints(homeStats.daily_activity, 'create_page')" fill="none" stroke="#3b82f6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </div>
+                  <!-- 实体总数 -->
+                  <div class="home-kpi-card">
+                    <div class="home-kpi-header">
+                      <span class="home-kpi-label">实体总数</span>
+                    </div>
+                    <div class="home-kpi-value">{{ entityTotal }}</div>
+                    <div class="home-kpi-sub">分布在 {{ Object.keys(homeStats.by_type || {}).length }} 类目录</div>
+                    <svg class="home-kpi-spark" viewBox="0 0 120 28" preserveAspectRatio="none">
+                      <polyline :points="sparkPoints(homeStats.daily_activity, 'edit_page')" fill="none" stroke="#3b82f6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </div>
+                  <!-- 今日对话 -->
+                  <div class="home-kpi-card">
+                    <div class="home-kpi-header">
+                      <span class="home-kpi-label">今日对话</span>
+                      <span v-if="weekDelta.chat > 0" class="home-kpi-delta up">+{{ weekDelta.chat }}</span>
+                      <span v-else-if="weekDelta.chat < 0" class="home-kpi-delta down">{{ weekDelta.chat }}</span>
+                    </div>
+                    <div class="home-kpi-value">{{ homeStats.today?.chat || 0 }}</div>
+                    <div class="home-kpi-sub">本周共 {{ homeStats.this_week?.chat || 0 }} 次</div>
+                    <svg class="home-kpi-spark" viewBox="0 0 120 28" preserveAspectRatio="none">
+                      <polyline :points="sparkPoints(homeStats.daily_activity, 'chat')" fill="none" stroke="#3b82f6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </div>
+                  <!-- 待精炼 -->
+                  <div class="home-kpi-card" :class="{ 'home-kpi-alert': staleCount > 0 }">
+                    <div class="home-kpi-header">
+                      <span class="home-kpi-label">待精炼页面</span>
+                      <span v-if="staleCount > 0" class="home-kpi-delta warn">需处理</span>
+                    </div>
+                    <div class="home-kpi-value" :class="{ 'kpi-val-alert': staleCount > 0 }">{{ staleCount }}</div>
+                    <div class="home-kpi-sub">解析不完整，需重跑</div>
+                    <svg class="home-kpi-spark" viewBox="0 0 120 28" preserveAspectRatio="none">
+                      <line x1="0" y1="20" x2="120" y2="20" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4 4"/>
+                    </svg>
+                  </div>
+                  <!-- 健康度 -->
+                  <div class="home-kpi-card home-kpi-health">
+                    <div class="home-kpi-header">
+                      <span class="home-kpi-label">知识库健康度</span>
+                      <span class="home-kpi-delta up">{{ lintHealthScore }}%</span>
+                    </div>
+                    <div class="home-kpi-value kpi-val-health">{{ lintHealthScore }}%</div>
+                    <div class="home-kpi-sub">
+                      断链 {{ lint.broken_links?.length || 0 }} · 孤立 {{ lint.orphan_pages?.length || 0 }} · 过期 {{ lint.stale_pages?.length || 0 }}
+                    </div>
+                    <div class="home-health-bar-wrap">
+                      <div class="home-health-bar" :style="{ width: lintHealthScore + '%' }"></div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Activity Feed -->
+                <div class="home-feed-panel">
+                  <div class="home-feed-header">
+                    <span class="home-feed-title">近期动态</span>
+                  </div>
+                  <div class="home-feed-list">
+                    <button
+                      v-for="item in homeFeedItems"
+                      :key="item.id"
+                      class="home-feed-item"
+                      @click="item.onClick && item.onClick()"
+                    >
+                      <div class="home-feed-ico" :class="item.icoClass">{{ item.ico }}</div>
+                      <div class="home-feed-body">
+                        <div class="home-feed-name">{{ item.title }}</div>
+                        <div class="home-feed-meta">{{ item.meta }}</div>
+                      </div>
+                      <div class="home-feed-time">{{ item.time }}</div>
+                    </button>
+                    <div v-if="!homeFeedItems.length" class="detail-item">暂无近期动态</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- ══ 右列 ══ -->
+              <div class="home-right-col">
+                <div class="home-cal-label">对话日历 <span>点击日期查看记录</span></div>
+
+                <!-- 月历 -->
+                <div class="home-cal-panel">
+                  <div class="home-cal-header">
+                    <span class="home-cal-month">{{ calMonthLabel }}</span>
+                    <div class="home-cal-nav">
+                      <button class="home-cal-nav-btn" @click="calPrevMonth">‹</button>
+                      <button class="home-cal-nav-btn" @click="calNextMonth">›</button>
+                    </div>
+                  </div>
+                  <div class="home-cal-grid">
+                    <div class="home-cal-weekdays">
+                      <span v-for="w in ['一','二','三','四','五','六','日']" :key="w" class="home-cal-wd">{{ w }}</span>
+                    </div>
+                    <div class="home-cal-days">
+                      <div
+                        v-for="(cell, idx) in calCells"
+                        :key="idx"
+                        class="home-cal-day"
+                        :class="[
+                          cell.day ? '' : 'empty',
+                          cell.isToday ? 'today' : '',
+                          cell.isSelected ? 'selected' : '',
+                          cell.chatCount > 0 ? 'level-' + cell.level : '',
+                        ]"
+                        @click="cell.day && selectCalDay(cell)"
+                      >
+                        <span v-if="cell.day" class="home-cal-day-num">{{ cell.day }}</span>
+                        <span v-if="cell.chatCount > 0" class="home-cal-dot"></span>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="home-cal-legend">
+                    <span>对话次数：</span>
+                    <div class="home-cal-legend-items">
+                      <span>少</span>
+                      <div v-for="c in ['#dbeafe','#bfdbfe','#93c5fd','#60a5fa']" :key="c" class="home-cal-legend-box" :style="{ background: c }"></div>
+                      <span>多</span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 健康度详情 -->
+                <div class="home-health-card">
+                  <div class="home-feed-title" style="margin-bottom:10px">知识库健康度</div>
+                  <div v-for="h in healthItems" :key="h.label" class="home-health-row">
+                    <span class="home-health-label">{{ h.label }}</span>
+                    <div class="home-health-bar-wrap" style="flex:1">
+                      <div class="home-health-bar" :style="{ width: h.val + '%', background: h.color }"></div>
+                    </div>
+                    <span class="home-health-val">{{ h.val }}%</span>
+                  </div>
+                  <button class="home-health-link" @click="setActiveView('lint')">前往体检 →</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 日历抽屉 -->
+            <div v-if="calDrawerOpen" class="home-cal-drawer-overlay" @click.self="calDrawerOpen = false">
+              <div class="home-cal-drawer">
+                <div class="home-cal-drawer-header">
+                  <div>
+                    <div class="home-cal-drawer-title">对话记录</div>
+                    <div class="home-cal-drawer-date">{{ calDrawerDateLabel }} · {{ calDrawerQA.length }} 条</div>
+                  </div>
+                  <button class="home-cal-drawer-close" @click="calDrawerOpen = false">✕</button>
+                </div>
+                <div class="home-cal-drawer-body">
+                  <div v-if="!calDrawerQA.length" class="home-cal-drawer-empty">
+                    <div style="font-size:32px;opacity:.4">💬</div>
+                    <span>当日暂无对话记录</span>
+                  </div>
                   <button
-                    v-for="qa in homeStats.recent_qa || []"
+                    v-for="qa in calDrawerQA"
                     :key="qa.slug"
-                    class="qa-row"
-                    @click="openQAFromHome(qa)"
+                    class="home-qa-item"
+                    @click="openQAFromHome(qa); calDrawerOpen = false"
                   >
-                    <div class="qa-title">{{ qa.title }}</div>
-                    <div class="qa-snippet">{{ qa.snippet || '（无摘要）' }}</div>
-                    <div class="qa-date">{{ qa.created }}</div>
+                    <div class="home-qa-q">
+                      <span class="home-qa-q-icon">Q</span>
+                      {{ qa.title }}
+                    </div>
+                    <div class="home-qa-snippet">{{ qa.snippet || '（无摘要）' }}</div>
+                    <div class="home-qa-meta">
+                      <span class="home-qa-tag">问答记忆</span>
+                      <span>{{ qa.created }}</span>
+                    </div>
                   </button>
-                  <div v-if="!homeStats.recent_qa?.length" class="detail-item">最近还没有对话查询</div>
                 </div>
-              </section>
+              </div>
             </div>
-
-            <!-- FAQ 静态说明 -->
-            <section class="home-panel home-faq">
-              <div class="section-title section-title-sm">使用问答（FAQ）</div>
-              <el-collapse>
-                <el-collapse-item v-for="(item, idx) in faqItems" :key="idx" :name="idx">
-                  <template #title>
-                    <span class="faq-q">{{ item.q }}</span>
-                  </template>
-                  <div class="faq-a">{{ item.a }}</div>
-                </el-collapse-item>
-              </el-collapse>
-            </section>
           </template>
+
 
           <template v-else-if="activeView === 'ingest'">
             <div class="section-header">
@@ -1554,6 +1676,232 @@ const homeStats = ref({
   recent_notes: [],
 })
 const homeActivity = ref([])
+// ─────────────────────────────────────────────────────────────────
+// 首页重设计补丁 — 追加到 App.vue <script setup> 中
+// 找到：const homeActivity = ref([])
+// 在该行之后粘贴以下全部内容
+// ─────────────────────────────────────────────────────────────────
+
+// ── 日历状态 ──
+const calYear = ref(new Date().getFullYear())
+const calMonth = ref(new Date().getMonth())   // 0-indexed
+const calDrawerOpen = ref(false)
+const calSelectedDay = ref(null)  // { year, month, day }
+
+// ── 日历月份标签 ──
+const calMonthLabel = computed(() => {
+  return new Date(calYear.value, calMonth.value, 1)
+    .toLocaleDateString('zh-CN', { year: 'numeric', month: 'long' })
+})
+
+// ── 日历翻页 ──
+function calPrevMonth() {
+  if (calMonth.value === 0) { calYear.value -= 1; calMonth.value = 11 }
+  else calMonth.value -= 1
+}
+function calNextMonth() {
+  if (calMonth.value === 11) { calYear.value += 1; calMonth.value = 0 }
+  else calMonth.value += 1
+}
+
+// ── 从 homeStats.recent_qa 构建按日期索引的对话记录 ──
+const qaByDate = computed(() => {
+  const map = {}
+  const qaList = homeStats.value.recent_qa || []
+  qaList.forEach(qa => {
+    const d = (qa.created || '').slice(0, 10)  // YYYY-MM-DD
+    if (!map[d]) map[d] = []
+    map[d].push(qa)
+  })
+  return map
+})
+
+// ── 日历格子数据 ──
+const calCells = computed(() => {
+  const today = new Date()
+  const firstDay = new Date(calYear.value, calMonth.value, 1).getDay()
+  const daysInMonth = new Date(calYear.value, calMonth.value + 1, 0).getDate()
+  const startOffset = (firstDay + 6) % 7  // 周一为起点
+
+  const cells = []
+  for (let i = 0; i < startOffset; i++) cells.push({ day: null, chatCount: 0, level: 0 })
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = `${calYear.value}-${String(calMonth.value + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+    const chatCount = (qaByDate.value[dateStr] || []).length
+    let level = 0
+    if (chatCount >= 1) level = 1
+    if (chatCount >= 2) level = 2
+    if (chatCount >= 4) level = 3
+    if (chatCount >= 6) level = 4
+    const isToday = (
+      today.getFullYear() === calYear.value &&
+      today.getMonth() === calMonth.value &&
+      today.getDate() === d
+    )
+    const isSelected = (
+      calSelectedDay.value?.year === calYear.value &&
+      calSelectedDay.value?.month === calMonth.value &&
+      calSelectedDay.value?.day === d
+    )
+    cells.push({ day: d, dateStr, chatCount, level, isToday, isSelected })
+  }
+  return cells
+})
+
+// ── 点击日历日期 ──
+function selectCalDay(cell) {
+  calSelectedDay.value = { year: calYear.value, month: calMonth.value, day: cell.day }
+  calDrawerOpen.value = true
+}
+
+// ── 抽屉中的 QA 列表 ──
+const calDrawerQA = computed(() => {
+  if (!calSelectedDay.value) return []
+  const { year, month, day } = calSelectedDay.value
+  const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+  return qaByDate.value[dateStr] || []
+})
+
+// ── 抽屉日期标签 ──
+const calDrawerDateLabel = computed(() => {
+  if (!calSelectedDay.value) return ''
+  const { year, month, day } = calSelectedDay.value
+  return new Date(year, month, day).toLocaleDateString('zh-CN', {
+    year: 'numeric', month: 'long', day: 'numeric', weekday: 'long'
+  })
+})
+
+// ── 待精炼数量（从 batches 中统计） ──
+const staleCount = computed(() => {
+  return batches.value.filter(b => b.status === 'stale' || b.status === 'partial').length
+})
+
+// ── 知识库健康度评分 ──
+const lintHealthScore = computed(() => {
+  const broken = lint.value.broken_links?.length || 0
+  const orphan = lint.value.orphan_pages?.length || 0
+  const stale = lint.value.stale_pages?.length || 0
+  const total = broken + orphan + stale
+  if (total === 0) return 100
+  return Math.max(0, Math.round(100 - total * 3))
+})
+
+// ── 健康度分项 ──
+const healthItems = computed(() => {
+  const broken = lint.value.broken_links?.length || 0
+  const orphan = lint.value.orphan_pages?.length || 0
+  const stale = lint.value.stale_pages?.length || 0
+  return [
+    { label: '断链检测', val: Math.max(0, 100 - broken * 10), color: '#19bf78' },
+    { label: '孤立页面', val: Math.max(0, 100 - orphan * 8), color: '#f59e0b' },
+    { label: '内容新鲜', val: Math.max(0, 100 - stale * 5), color: '#3b82f6' },
+  ]
+})
+
+// ── 首页问候语 ──
+const homeGreeting = computed(() => {
+  const h = new Date().getHours()
+  if (h < 6) return '夜深了'
+  if (h < 12) return '早上好'
+  if (h < 14) return '中午好'
+  if (h < 18) return '下午好'
+  return '晚上好'
+})
+
+// ── Sparkline 点位计算 ──
+function sparkPoints(dailyActivity, key) {
+  const days = (dailyActivity || []).slice(-12)
+  if (!days.length) return '0,20 120,20'
+  const values = days.map(d => Number(d[key] || 0))
+  const max = Math.max(...values, 1)
+  if (days.length === 1) {
+    const y = Math.round(26 - (Number(days[0][key] || 0) / max) * 22)
+    return `0,${y} 120,${y}`
+  }
+  return days.map((d, i) => {
+    const x = Math.round((i / (days.length - 1)) * 120)
+    const y = Math.round(26 - (Number(d[key] || 0) / max) * 22)
+    return `${x},${y}`
+  }).join(' ')
+}
+
+// ── Activity Feed（整合批次 + 笔记 + 问答动态） ──
+const homeFeedItems = computed(() => {
+  const items = []
+  // 近期批次
+  const recentB = batches.value.slice(0, 4)
+  recentB.forEach(b => {
+    items.push({
+      id: `batch-${b.id}`,
+      ico: b.status === 'stale' ? '⚠️' : '📥',
+      icoClass: b.status === 'stale' ? 'amber' : 'blue',
+      title: summarizeBatchTitle(b) + (b.status === 'stale' ? ' 待精炼' : ' 入库完成'),
+      meta: `生成 ${b.generated_files?.length || 0} 个知识页 · ${formatTime(b.created_at)}`,
+      time: relativeTime(b.created_at),
+      onClick: () => openBatch(b.id),
+    })
+  })
+  // 最近新建笔记
+  const recentNotes = (homeStats.value.recent_notes || []).slice(0, 3)
+  recentNotes.forEach(note => {
+    items.push({
+      id: `note-${note.slug}`,
+      ico: '✍',
+      icoClass: 'green',
+      title: note.title,
+      meta: `新建笔记 · ${note.created || note.updated || ''}`,
+      time: note.created || note.updated || '',
+      onClick: () => openNoteFromHome(note),
+    })
+  })
+  // 近期问答
+  const recentQA = (homeStats.value.recent_qa || []).slice(0, 3)
+  recentQA.forEach(qa => {
+    items.push({
+      id: `qa-${qa.slug}`,
+      ico: '💬',
+      icoClass: 'purple',
+      title: qa.title,
+      meta: `已沉淀为问答记忆 · ${qa.created || ''}`,
+      time: qa.created || '',
+      onClick: () => openQAFromHome(qa),
+    })
+  })
+  // 按时间排序（简单按插入顺序，批次已经是倒序）
+  return items.slice(0, 8)
+})
+
+// ── 相对时间格式化 ──
+function relativeTime(isoStr) {
+  if (!isoStr) return ''
+  const diff = Date.now() - new Date(isoStr).getTime()
+  const m = Math.floor(diff / 60000)
+  if (m < 1) return '刚刚'
+  if (m < 60) return `${m}分钟前`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}小时前`
+  const d = Math.floor(h / 24)
+  if (d < 7) return `${d}天前`
+  return formatTime(isoStr).slice(0, 10)
+}
+
+// ── 导航跳转辅助（setActiveView 已存在则跳过） ──
+function setActiveView(view) {
+  activeView.value = view
+  if (view === 'graph' && !graph.value.nodes.length) {
+    loadGraph()
+  } else if (view === 'graph') {
+    nextTick(scheduleRenderGraph)
+  } else if (view === 'config' && currentRole.value === 'admin') {
+    loadInvites()
+  }
+}
+
+// ── 打开新建笔记对话框 ──
+function openNoteDialog() {
+  noteDialog.value = true
+}
+
 
 // FAQ 静态内容（直接改这里维护）
 const faqItems = [
@@ -2307,16 +2655,7 @@ async function testModelConnection(role = 'llm') {
   }
 }
 
-function setActiveView(view) {
-  activeView.value = view
-  if (view === 'graph' && !graph.value.nodes.length) {
-    loadGraph()
-  } else if (view === 'graph') {
-    nextTick(scheduleRenderGraph)
-  } else if (view === 'config' && currentRole.value === 'admin') {
-    loadInvites()
-  }
-}
+
 
 function handleNavItemClick(item) {
   if (item.key === 'knowledge') {

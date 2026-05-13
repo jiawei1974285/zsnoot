@@ -1,0 +1,26 @@
+{
+  "license_id": "lic_demo_001",
+  "customer": {
+    "name": "Demo Police Unit",
+    "contact": "demo@example.com"
+  },
+  "tier": "organization_local",
+  "issued_at": "2026-05-01T00:00:00Z",
+  "expires_at": "2027-05-01T00:00:00Z",
+  "max_seats": 20,
+  "machine_binding": {
+    "mode": "fingerprint",
+    "fingerprints": [
+      "demo-machine-fingerprint"
+    ]
+  },
+  "features": {
+    "ingest": true,
+    "graph": true,
+    "chat": true,
+    "batch_reparse": true,
+    "license_admin": true
+  },
+  "signature_alg": "Ed25519",
+  "signature": "base64-signature-placeholder"
+}
