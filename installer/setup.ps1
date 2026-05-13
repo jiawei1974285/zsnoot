@@ -150,6 +150,8 @@ Write-Host "  ✓ 配置写入 $ConfigFile" -ForegroundColor Green
 # ─── 4. 绑定 ────────────────────────────────────────────
 Write-Host ""
 Write-Host "[4/5] 绑定本机到云端用户 ‘$username’..." -ForegroundColor Yellow
+# 内嵌 Python 默认不把 CWD 加入 sys.path；显式设 PYTHONPATH 保证 `-m scripts.bind_user` 能找到
+$env:PYTHONPATH = $RootDir
 & $TargetPy -m scripts.bind_user bind $username
 if ($LASTEXITCODE -ne 0) { Pause-Exit 1 }
 

@@ -134,14 +134,19 @@ if (-not $Lite) {
     Write-Host "  解压 embed 到 $EmbedDir" -ForegroundColor White
     Expand-Archive -Path $EmbedZipPath -DestinationPath $EmbedDir -Force
 
-    # 改 ._pth：取消 #import site 注释，让 site-packages 生效（pip 才能 import）
+    # 改 ._pth：
+    #   ① 取消 #import site 注释 —— 让 site-packages 生效（pip 装的包能 import）
+    #   ② 加 `..` —— 让 python_embed/ 的上级（安装根目录）能 import scripts.*, cloud.*
     $pthFile = Get-ChildItem -Path $EmbedDir -Filter "python*._pth" | Select-Object -First 1
     if ($pthFile) {
         $content = Get-Content $pthFile.FullName -Raw
-        # 处理 "#import site" 和 "# import site" 两种格式
         $content = $content -replace '(?m)^#\s*import\s+site\s*$', 'import site'
+        # 在 `.` 行后插入 `..`（若还没加）
+        if ($content -notmatch '(?m)^\.\.\s*$') {
+            $content = $content -replace '(?m)^\.\s*$', ".`r`n.."
+        }
         Set-Content -Path $pthFile.FullName -Value $content -Encoding ascii
-        Write-Host "  ✓ 修了 ._pth (import site 已启用)" -ForegroundColor Green
+        Write-Host "  ✓ 修了 ._pth（启用 site + 加安装根到 sys.path）" -ForegroundColor Green
     }
 
     $EmbedPy = Join-Path $EmbedDir "python.exe"
