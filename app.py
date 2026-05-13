@@ -522,14 +522,45 @@ _AUTH_PUBLIC_EXACT = {'/', '/logo.png', '/favicon.ico'}
 #   - 鉴权 → Authorization: Bearer <jwt> 验签后写入 flask.g
 # 单体模式（不设环境变量）行为完全不变。
 def _local_cors_origins() -> List[str]:
+    """允许跨域调本机 agent 的 origin 列表。
+    自动包含以下三类，并集去重：
+      ① `MJQ_LOCAL_CORS_ORIGINS` 显式声明的（逗号分隔）
+      ② 从 `MJQ_CLOUD_URL` 推导出的 origin —— 用户最常忘配的就是这个
+      ③ 开发端口（localhost:5174 / 4174 等）—— 单体或 dev server 用
+    """
+    origins: List[str] = []
+
+    # ① 显式声明
     raw = os.environ.get('MJQ_LOCAL_CORS_ORIGINS', '').strip()
     if raw:
-        return [o.strip() for o in raw.split(',') if o.strip()]
-    # 默认开发端口
-    return [
+        origins.extend(o.strip() for o in raw.split(',') if o.strip())
+
+    # ② 从 MJQ_CLOUD_URL 推导
+    cloud = os.environ.get('MJQ_CLOUD_URL', '').strip()
+    if cloud:
+        # 取 scheme://host[:port]，丢路径
+        try:
+            from urllib.parse import urlparse
+            u = urlparse(cloud)
+            if u.scheme and u.netloc:
+                origins.append(f"{u.scheme}://{u.netloc}")
+        except Exception:
+            pass
+
+    # ③ 开发端口
+    origins.extend([
         'http://localhost:5174', 'http://127.0.0.1:5174',
         'http://localhost:4174', 'http://127.0.0.1:4174',
-    ]
+    ])
+
+    # 去重保序
+    seen = set()
+    result = []
+    for o in origins:
+        if o not in seen:
+            seen.add(o)
+            result.append(o)
+    return result
 
 
 def _jwt_secret_cached():
