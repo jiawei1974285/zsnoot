@@ -54,13 +54,42 @@ curl -I http://<IP>/
 
 ## 本机 agent 怎么连这台服务器
 
-每个用户在自己电脑上：
+### 方式 A：用 server-baked 安装包（推荐发给同事）
+
+1. 管理员在 Windows 上一次性 build & upload：
+
+   ```powershell
+   # build 时把云端 URL + JWT 密钥预置进 zip
+   .\installer\build_release.ps1 `
+     -PresetCloudUrl http://<服务器 IP>:8090 `
+     -PresetJwt <服务器 cloud.env 里的 64 hex>
+
+   # 推到服务器
+   pscp dist\zsnoot-agent-v1.0.0-bundled.zip `
+     root@<服务器 IP>:/opt/mjq-handynotes/public-downloads/zsnoot-agent-v1.0.0.zip
+   ```
+
+2. 服务器上配 nginx 暴露 `/downloads/`（在 `nginx.conf` 里加）：
+
+   ```nginx
+   location /downloads/ {
+       alias /opt/mjq-handynotes/public-downloads/;
+       autoindex on;
+       gzip off;
+   }
+   ```
+
+   然后 `sudo systemctl reload nginx`。
+
+3. 同事在浏览器注册页直接点「下载本机客户端」→ 解压 → 双击 `setup.bat`（只问一个用户名）→ 双击 `start.bat`。
+
+### 方式 B：手工（开发 / 调试用）
 
 ```powershell
 # Windows
-$env:MJQ_CLOUD_URL    = "http://<服务器 IP>"
+$env:MJQ_CLOUD_URL    = "http://<服务器 IP>:8090"
 $env:MJQ_JWT_SECRET   = "服务器 cloud.env 里那一串 64 位 hex"
-$env:MJQ_LOCAL_CORS_ORIGINS = "http://<服务器 IP>"
+$env:MJQ_LOCAL_CORS_ORIGINS = "http://<服务器 IP>:8090"
 
 # 绑定本机到云端用户名（与浏览器里要登录的用户名一致）
 python -m scripts.bind_user bind alice
@@ -82,6 +111,11 @@ HTTP 页面访问 HTTP localhost 是浏览器允许的，不会报 mixed content
 **Q：服务器打开页面但 API 401 / 412**
 - 401：cloud 没启动 → `sudo systemctl status mjq-cloud`
 - 412：本机 agent 未绑定 → 在用户电脑上 `python -m scripts.bind_user bind <name>` 后重启 agent
+
+**Q：GET 通但 POST/PUT 全部 "Failed to fetch"（Chrome PNA）**
+浏览器从公网 IP 调 127.0.0.1 时，Chrome 走 Private Network Access 预检，
+需要本机 agent 应答 `Access-Control-Allow-Private-Network: true`。
+新版 agent（commit c662735+）已支持；老版本要么升级，要么改 chrome://flags 关掉 PNA。
 
 **Q：CORS error**
 `cloud.env` 里 `MJQ_CLOUD_CORS_ORIGINS` 必须包含浏览器看到的 Origin
