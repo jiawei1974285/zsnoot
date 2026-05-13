@@ -12,7 +12,9 @@
 # 输出：dist/zsnoot-agent-v1.0.0.zip
 
 param(
-    [switch]$Lite
+    [switch]$Lite,
+    [string]$PresetCloudUrl = "",
+    [string]$PresetJwt = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -88,6 +90,18 @@ foreach ($f in @("schema.md", "purpose.md")) {
     if (Test-Path (Join-Path $RootDir $f)) {
         Copy-Item (Join-Path $RootDir $f) (Join-Path $OutDir $f)
     }
+}
+
+# 预置服务器配置（admin 打包时给）—— 用户解压后 setup.bat 自动读，免填两项
+if ($PresetCloudUrl -and $PresetJwt) {
+    $PresetPath = Join-Path $OutDir "preset.ini"
+    @(
+        "# 服务器预置 —— 打包时由 admin 注入，setup.bat 自动读为默认值",
+        "MJQ_CLOUD_URL=$PresetCloudUrl",
+        "MJQ_JWT_SECRET=$PresetJwt",
+        "MJQ_LOCAL_CORS_ORIGINS=$PresetCloudUrl,http://localhost:5174"
+    ) | Set-Content -Path $PresetPath -Encoding utf8
+    Write-Host "  ✓ preset.ini 已注入（云端 $PresetCloudUrl）" -ForegroundColor Green
 }
 
 # ─── 2. 内嵌 Python（bundled 模式） ──────────────────

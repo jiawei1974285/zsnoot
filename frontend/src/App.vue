@@ -166,6 +166,14 @@
           <el-icon><Box /></el-icon>
           使用本机账户登录
         </button>
+
+        <a v-if="SPLIT_MODE_ENABLED" href="/downloads/zsnoot-agent-v1.0.0.zip" class="auth-download-button" download>
+          <el-icon><Download /></el-icon>
+          <span>
+            <strong>下载本机客户端</strong>
+            <small>解压后双击 setup.bat，按提示输入用户名即可</small>
+          </span>
+        </a>
       </template>
 
       <div class="auth-card-footer">
@@ -1829,6 +1837,7 @@ import {
   Tools,
   UploadFilled,
   View,
+  Download,
 } from '@element-plus/icons-vue'
 import { GRAPH_LAYOUTS, layoutTargets } from './graphLayouts'
 import { sortKnowledgePages } from './pageSorting'

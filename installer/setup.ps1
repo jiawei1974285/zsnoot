@@ -95,7 +95,10 @@ Write-Host ""
 Write-Host "[3/5] 配置云端连接..." -ForegroundColor Yellow
 
 $ConfigFile = Join-Path $RootDir "config.ini"
+$PresetFile = Join-Path $RootDir "preset.ini"
 $existing = @{}
+
+# 已有 config.ini 优先（用户跑过 setup 已配过）；否则用打包时预置的 preset.ini
 if (Test-Path $ConfigFile) {
     Get-Content $ConfigFile | ForEach-Object {
         if ($_ -match '^\s*([A-Z_]+)\s*=\s*(.+?)\s*$') {
@@ -103,6 +106,14 @@ if (Test-Path $ConfigFile) {
         }
     }
     Write-Host "  检测到已有 config.ini；留空回车将沿用旧值" -ForegroundColor White
+} elseif (Test-Path $PresetFile) {
+    Get-Content $PresetFile | ForEach-Object {
+        if ($_ -match '^\s*([A-Z_]+)\s*=\s*(.+?)\s*$') {
+            $existing[$Matches[1]] = $Matches[2]
+        }
+    }
+    Write-Host "  检测到 preset.ini（打包时预置的服务器配置），云端地址 + 密钥已自动填好" -ForegroundColor Green
+    Write-Host "  你只需要填用户名" -ForegroundColor Green
 }
 
 function Prompt-With-Default($label, $key, $default) {
