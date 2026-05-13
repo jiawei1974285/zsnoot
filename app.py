@@ -4,7 +4,7 @@
 功能：笔记记录 + Markdown 文件存储 + YAML frontmatter + LLM 自动组织
 """
 from flask import Flask, render_template, request, jsonify, send_from_directory, session
-from typing import List, Dict
+from typing import List, Dict, Optional
 from html.parser import HTMLParser
 import os
 import secrets

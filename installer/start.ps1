@@ -28,10 +28,18 @@ if (-not $env:MJQ_JWT_SECRET) {
     Pause-Exit 1
 }
 
-# 找 venv
-$VenvPython = Join-Path $RootDir ".venv\Scripts\python.exe"
-if (-not (Test-Path $VenvPython)) {
-    Write-Host "✗ 没找到 .venv，请先跑 setup.bat" -ForegroundColor Red
+# 选 Python：优先内嵌；其次 .venv
+$EmbedPy = Join-Path $RootDir "python_embed\python.exe"
+$VenvPy = Join-Path $RootDir ".venv\Scripts\python.exe"
+if (Test-Path $EmbedPy) {
+    $TargetPy = $EmbedPy
+    $modeLabel = "内嵌 Python"
+} elseif (Test-Path $VenvPy) {
+    $TargetPy = $VenvPy
+    $modeLabel = ".venv"
+} else {
+    Write-Host "✗ 找不到 Python（python_embed/ 和 .venv 都不存在）" -ForegroundColor Red
+    Write-Host "  请先跑 setup.bat" -ForegroundColor Yellow
     Pause-Exit 1
 }
 
@@ -55,6 +63,7 @@ Write-Host "  知枢 · 本机 agent" -ForegroundColor Cyan
 Write-Host "═══════════════════════════════════════════════════" -ForegroundColor Cyan
 Write-Host "  云端：     $env:MJQ_CLOUD_URL" -ForegroundColor White
 Write-Host "  绑定用户： $env:BOUND_USER" -ForegroundColor White
+Write-Host "  Python：   $modeLabel" -ForegroundColor White
 Write-Host "  监听：     http://127.0.0.1:5004" -ForegroundColor White
 Write-Host ""
 Write-Host "  浏览器打开 $env:MJQ_CLOUD_URL 即可使用"
@@ -63,4 +72,4 @@ Write-Host "══════════════════════�
 Write-Host ""
 
 $Host.UI.RawUI.WindowTitle = "知枢 agent ($env:BOUND_USER)"
-& $VenvPython app.py
+& $TargetPy app.py
