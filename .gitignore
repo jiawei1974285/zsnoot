@@ -104,3 +104,6 @@ cloud/data/
 config/jwt.secret
 frontend/.env.local
 data/machine_binding.json
+
+# 本机 agent 一键安装包产物
+dist/
