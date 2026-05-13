@@ -295,7 +295,58 @@
         </div>
 
         <section class="content-surface">
-          <template v-if="activeView === 'home'">
+          <!-- 门户模式首页：仅展示"开始使用本机客户端"引导 -->
+          <template v-if="activeView === 'home' && IS_PORTAL_MODE">
+            <div class="portal-home">
+              <div class="portal-hero">
+                <div class="portal-hero-icon">🚀</div>
+                <h1>欢迎回来，{{ currentUser }}</h1>
+                <p class="portal-hero-sub">
+                  {{ currentProfile.unit ? `${currentProfile.unit} · ${currentProfile.title}` : '账号已就绪' }}
+                </p>
+              </div>
+
+              <div class="portal-tip">
+                <strong>这里是"账号门户"，不是工作区。</strong>
+                你的所有数据都在本机；要上传材料、做对话、看图谱，请打开本机客户端：
+              </div>
+
+              <div class="portal-actions">
+                <a class="portal-action portal-action-primary" href="http://localhost:5004" target="_blank">
+                  <div class="portal-action-icon">💻</div>
+                  <div class="portal-action-body">
+                    <strong>打开本机客户端</strong>
+                    <small>http://localhost:5004 — 必须先双击桌面"知枢"图标启动 agent</small>
+                  </div>
+                </a>
+
+                <a class="portal-action" href="/downloads/zsnoot-agent-v1.0.0.zip" download>
+                  <div class="portal-action-icon">📦</div>
+                  <div class="portal-action-body">
+                    <strong>下载本机客户端</strong>
+                    <small>首次使用 / 换机器 / 重装 — 解压后双击 setup.bat</small>
+                  </div>
+                </a>
+
+                <a class="portal-action" v-if="currentRole === 'admin'" @click="setActiveView('config')">
+                  <div class="portal-action-icon">👥</div>
+                  <div class="portal-action-body">
+                    <strong>管理员控制台</strong>
+                    <small>邀请码 · 用户列表 · 心跳监控</small>
+                  </div>
+                </a>
+              </div>
+
+              <div class="portal-footer-tip">
+                <small>
+                  下次使用建议：双击桌面"知枢"图标 → 浏览器会自动开 localhost:5004，不需要回这个门户页。
+                </small>
+              </div>
+            </div>
+          </template>
+
+          <!-- 正常模式首页（本机 agent 服务的 SPA） -->
+          <template v-else-if="activeView === 'home'">
             <!-- ── 页头 ── -->
             <div class="home-page-header">
               <div>
@@ -1849,16 +1900,23 @@ import {
   clearTokens,
 } from './apiClient'
 
-const navItems = [
-  { key: 'home', label: '首页', icon: HomeFilled },
-  { key: 'ingest', label: '上传材料', icon: Box },
-  { key: 'new-note', label: '新建笔记', icon: Plus },
-  { key: 'chat', label: '对话查询', icon: ChatDotRound },
-  { key: 'knowledge', label: '知识卡片', icon: Collection },
-  { key: 'graph', label: '关系图谱', icon: Connection },
-  { key: 'lint', label: '知识库体检', icon: CircleCheck },
-  { key: 'config', label: '系统配置', icon: Setting },
+// 门户模式：当前页面不是从 localhost 打开（一般指云端公网 IP / 域名）。
+// 这时本机 agent 不可达，只展示账号 / 下载相关菜单；隐藏工作菜单。
+const IS_PORTAL_MODE = !['localhost', '127.0.0.1'].includes(window.location.hostname)
+
+const _allNavItems = [
+  { key: 'home', label: '首页', icon: HomeFilled, portal: true },
+  { key: 'ingest', label: '上传材料', icon: Box, portal: false },
+  { key: 'new-note', label: '新建笔记', icon: Plus, portal: false },
+  { key: 'chat', label: '对话查询', icon: ChatDotRound, portal: false },
+  { key: 'knowledge', label: '知识卡片', icon: Collection, portal: false },
+  { key: 'graph', label: '关系图谱', icon: Connection, portal: false },
+  { key: 'lint', label: '知识库体检', icon: CircleCheck, portal: false },
+  { key: 'config', label: '系统配置', icon: Setting, portal: true },  // 配置里有用户/邀请码（admin）
 ]
+const navItems = IS_PORTAL_MODE
+  ? _allNavItems.filter(item => item.portal)
+  : _allNavItems
 
 const activeView = ref('home')
 const batches = ref([])
