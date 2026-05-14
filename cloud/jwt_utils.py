@@ -79,8 +79,13 @@ def issue_refresh(secret: str, username: str, role: str) -> str:
 
 
 def verify_token(secret: str, token: str, *, expected_typ: Optional[str] = None) -> Dict:
-    """验签并返回 claims。失败抛 jwt.InvalidTokenError 子类。"""
-    claims = _jwt.decode(token, secret, algorithms=["HS256"])
+    """验签并返回 claims。失败抛 jwt.InvalidTokenError 子类。
+
+    leeway=60：容许签发方时钟比本机快 60 秒。云端公有云 NTP 准，用户本机
+    Windows 时钟常慢几秒到几十秒；没这个 leeway 会被 ImmatureSignatureError
+    "token not yet valid (iat)" 拦下——症状是登录成功但所有 API 都 401。
+    """
+    claims = _jwt.decode(token, secret, algorithms=["HS256"], leeway=60)
     if expected_typ and claims.get("typ") != expected_typ:
         raise _jwt.InvalidTokenError(f"token typ mismatch: expected {expected_typ}, got {claims.get('typ')}")
     return claims
