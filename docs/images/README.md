@@ -17,7 +17,7 @@
 | 07 | `07-setup-wizard.png` | setup.bat 弹出的黑底窗口（向导问问题那一刻）| 800×500 |
 | 08 | `08-setup-done.png` | setup 向导最后"安装完成 ✓"那一屏 | 800×500 |
 | 09 | `09-agent-window.png` | start.bat 启动后的 agent 窗口（含云端 / 绑定信息）+ 桌面图标小角 | 1200×600 |
-| 10 | `10-connected.png` | 浏览器左下"本地知识库已连接"绿点 | 400×200 局部 |
+| 10 | `10-localhost-home.png` | 浏览器自动弹出 `http://localhost:5004` 的首页（agent 启动后约 5 秒）| 1920×1080 |
 | 11 | `11-config-entry.png` | 左栏的"系统配置"齿轮图标位置 | 局部 200×400 |
 | 12 | `12-llm-config.png` | 系统配置 → LLM 模型那一段表单 | 1200×700 |
 | 13 | `13-test-llm.png` | 测试连接按钮 + 绿色"测试通过"提示 | 1000×400 |

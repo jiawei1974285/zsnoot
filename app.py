@@ -611,11 +611,12 @@ def _require_login():
         return ('', 204)
 
     # 公开路径优先放行（包括 /api/health 与 /api/auth/* —— 让前端在未绑定时仍能探测）
+    # 例外：/api/auth/change-password 实际要求登录，应该走 JWT 验签 + g.user 注入逻辑
     if path in _AUTH_PUBLIC_EXACT:
         return None
     if path.startswith('/assets/'):
         return None
-    if any(path.startswith(p) for p in _AUTH_PUBLIC_PREFIXES):
+    if path != '/api/auth/change-password' and any(path.startswith(p) for p in _AUTH_PUBLIC_PREFIXES):
         return None
 
     # ── JWT bridge：把 cloud 颁发的 access token 翻译成本请求的 g.user ──
